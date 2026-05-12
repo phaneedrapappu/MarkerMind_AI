@@ -1,0 +1,62 @@
+# MarketMind AI Configuration
+
+# Agent Settings
+agents:
+  market_data_agent:
+    enabled: true
+    fetch_interval: 300  # seconds (5 minutes)
+    stocks:
+      - "TCS"
+      - "WIPRO"
+      - "DMART"
+    data_sources:
+      - "NSE"
+  
+  ai_analysis_agent:
+    enabled: true
+    model: "gpt-4o-mini"  # Cost-effective GPT model
+    # api_key: ""  # Or set OPENAI_API_KEY environment variable
+  
+  signal_generator_agent:
+    enabled: true
+    risk_tolerance: "medium"  # low/medium/high
+  
+  news_agent:
+    enabled: false
+    fetch_interval: 600
+  
+  alert_agent:
+    enabled: false
+  
+  unusual_activity_agent:
+    enabled: false
+
+# Data Sources
+data_sources:
+  nse:
+    base_url: "https://www.nseindia.com"
+    timeout: 30
+  bse:
+    base_url: "https://www.bseindia.com"
+    timeout: 30
+
+# Database
+database:
+  type: "sqlite"  # For now, using SQLite; can upgrade to PostgreSQL
+  path: "data/marketmind.db"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/marketmind.log"
+
+# Message Queue (for future use)
+message_queue:
+  type: "in-memory"  # Can upgrade to RabbitMQ/Kafka later
+  
+# Notifications
+notifications:
+  whatsapp:
+    enabled: false
+    api_key: ""
