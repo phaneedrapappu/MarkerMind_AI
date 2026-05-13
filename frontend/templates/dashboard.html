@@ -2,52 +2,52 @@
 {% block title %}Dashboard – MarketMind AI{% endblock %}
 
 {% block content %}
+
+<!-- KPI Row -->
 <div class="row g-3 mb-4">
-  <!-- KPI Cards -->
-  <div class="col-6 col-md-3">
-    <div class="card shadow-sm text-center h-100">
-      <div class="card-body">
-        <div class="fs-1 fw-bold text-primary">{{ summary.total_stocks_tracked }}</div>
-        <div class="text-muted small">Stocks Tracked</div>
-      </div>
+  <div class="col-6 col-lg-3">
+    <div class="mm-kpi" style="--kpi-color:#38bdf8">
+      <i class="bi bi-graph-up mm-kpi-icon"></i>
+      <div class="mm-kpi-value text-accent">{{ summary.total_stocks_tracked }}</div>
+      <div class="mm-kpi-label">Stocks Tracked</div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
-    <div class="card shadow-sm text-center h-100">
-      <div class="card-body">
-        <div class="fs-1 fw-bold text-success">{{ summary.total_signals }}</div>
-        <div class="text-muted small">Signals Generated</div>
-      </div>
+  <div class="col-6 col-lg-3">
+    <div class="mm-kpi" style="--kpi-color:#22c55e">
+      <i class="bi bi-lightning-fill mm-kpi-icon"></i>
+      <div class="mm-kpi-value text-green">{{ summary.total_signals }}</div>
+      <div class="mm-kpi-label">Signals Today</div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
-    <div class="card shadow-sm text-center h-100">
-      <div class="card-body">
-        <div class="fs-1 fw-bold text-info">{{ summary.total_news }}</div>
-        <div class="text-muted small">News Articles</div>
-      </div>
+  <div class="col-6 col-lg-3">
+    <div class="mm-kpi" style="--kpi-color:#818cf8">
+      <i class="bi bi-newspaper mm-kpi-icon"></i>
+      <div class="mm-kpi-value" style="color:var(--accent2)">{{ summary.total_news }}</div>
+      <div class="mm-kpi-label">News Articles</div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
-    <div class="card shadow-sm text-center h-100">
-      <div class="card-body">
-        <div class="fs-1 fw-bold text-warning">{{ summary.total_alerts_sent }}</div>
-        <div class="text-muted small">Emails Sent</div>
-      </div>
+  <div class="col-6 col-lg-3">
+    <div class="mm-kpi" style="--kpi-color:#fbbf24">
+      <i class="bi bi-envelope-fill mm-kpi-icon"></i>
+      <div class="mm-kpi-value text-yellow">{{ summary.total_alerts_sent }}</div>
+      <div class="mm-kpi-label">Emails Sent</div>
     </div>
   </div>
 </div>
 
-<div class="row g-3">
-  <!-- Latest Signals -->
-  <div class="col-md-6">
-    <div class="card shadow-sm h-100">
-      <div class="card-header fw-semibold">
-        <i class="bi bi-graph-up-arrow text-success"></i> Latest Trading Signals
+<!-- Signals + News -->
+<div class="row g-3 mb-3">
+  <!-- Signals -->
+  <div class="col-12 col-lg-6">
+    <div class="mm-card h-100">
+      <div class="mm-card-header">
+        <span><i class="bi bi-lightning-fill"></i> Latest Trading Signals</span>
+        <a href="/alerts" class="text-muted" style="font-size:12px;text-decoration:none">View all →</a>
       </div>
-      <div class="card-body p-0">
-        <table class="table table-hover table-sm mb-0">
-          <thead class="table-dark">
+      <div class="mm-card-body p0">
+        {% if signals %}
+        <table class="mm-table">
+          <thead>
             <tr>
               <th>Symbol</th>
               <th>Signal</th>
@@ -58,120 +58,146 @@
           </thead>
           <tbody>
             {% for s in signals %}
-            <tr onclick="window.location='/stock/{{ s.symbol }}'" style="cursor:pointer">
+            <tr onclick="location.href='/stock/{{ s.symbol }}'">
               <td><strong>{{ s.symbol }}</strong></td>
               <td>
-                {% if s.signal_type == 'BUY' %}
-                  <span class="badge bg-success">📈 BUY</span>
-                {% elif s.signal_type == 'SELL' %}
-                  <span class="badge bg-danger">📉 SELL</span>
-                {% else %}
-                  <span class="badge bg-warning text-dark">⏸ HOLD</span>
-                {% endif %}
+                {% if s.signal_type == 'BUY' %}<span class="sig-buy">📈 BUY</span>
+                {% elif s.signal_type == 'SELL' %}<span class="sig-sell">📉 SELL</span>
+                {% else %}<span class="sig-hold">⏸ HOLD</span>{% endif %}
               </td>
-              <td>{{ "%.0f"|format(s.confidence * 100) }}%</td>
-              <td>{{ s.risk_level }}</td>
-              <td class="text-muted small">{{ s.signal_date[:10] if s.signal_date else '-' }}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <div style="width:40px;height:5px;background:var(--bg-surface);border-radius:99px;overflow:hidden">
+                    <div style="width:{{ (s.confidence*100)|int }}%;height:100%;background:var(--green);border-radius:99px"></div>
+                  </div>
+                  <span class="text-dim" style="font-size:12px">{{ "%.0f"|format(s.confidence * 100) }}%</span>
+                </div>
+              </td>
+              <td><span style="font-size:12px;color:var(--text-muted)">{{ s.risk_level }}</span></td>
+              <td style="font-size:11px;color:var(--text-muted)">{{ s.signal_date[:10] if s.signal_date else '-' }}</td>
             </tr>
-            {% else %}
-            <tr><td colspan="5" class="text-center text-muted py-3">No signals yet – run the pipeline first.</td></tr>
             {% endfor %}
           </tbody>
         </table>
+        {% else %}
+        <div class="empty-state">
+          <i class="bi bi-lightning"></i>
+          No signals yet.<br>
+          <button class="mm-btn-primary mt-3" style="font-size:13px;padding:7px 18px" onclick="openRunModal()">
+            <i class="bi bi-play-fill me-1"></i>Run Analysis
+          </button>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
 
-  <!-- Latest News -->
-  <div class="col-md-6">
-    <div class="card shadow-sm h-100">
-      <div class="card-header fw-semibold">
-        <i class="bi bi-newspaper text-info"></i> Latest News
+  <!-- News -->
+  <div class="col-12 col-lg-6">
+    <div class="mm-card h-100">
+      <div class="mm-card-header">
+        <span><i class="bi bi-newspaper"></i> Latest News</span>
+        <span style="font-size:12px;color:var(--text-muted)">{{ news|length }} articles</span>
       </div>
-      <ul class="list-group list-group-flush">
-        {% for n in news %}
-        <li class="list-group-item px-3 py-2">
-          <div class="d-flex justify-content-between align-items-start">
-            <div>
-              <a href="{{ n.url }}" target="_blank" class="text-decoration-none text-dark fw-semibold small">
-                {{ n.title[:90] }}{% if n.title|length > 90 %}…{% endif %}
-              </a>
-              <div class="text-muted" style="font-size:11px">{{ n.source }} · {{ n.published_at[:10] if n.published_at else '' }}</div>
+      <div class="mm-card-body p0">
+        {% if news %}
+          {% for n in news %}
+          <div class="mm-news-item">
+            <div class="mm-news-dot
+              {% if n.sentiment == 'POSITIVE' %}dot-pos
+              {% elif n.sentiment == 'NEGATIVE' %}dot-neg
+              {% else %}dot-neu{% endif %}"></div>
+            <div style="min-width:0">
+              <div class="mm-news-title">
+                <a href="{{ n.url }}" target="_blank" rel="noopener">
+                  {{ n.title[:100] }}{% if n.title and n.title|length > 100 %}…{% endif %}
+                </a>
+              </div>
+              <div class="mm-news-meta">
+                {% if n.symbol %}<strong>{{ n.symbol }}</strong> · {% endif %}{{ n.source }} · {{ n.published_at[:10] if n.published_at else '' }}
+              </div>
             </div>
-            {% if n.sentiment == 'POSITIVE' %}
-              <span class="badge bg-success-subtle text-success ms-2">+</span>
-            {% elif n.sentiment == 'NEGATIVE' %}
-              <span class="badge bg-danger-subtle text-danger ms-2">−</span>
-            {% else %}
-              <span class="badge bg-secondary-subtle text-secondary ms-2">~</span>
-            {% endif %}
           </div>
-        </li>
+          {% endfor %}
         {% else %}
-        <li class="list-group-item text-center text-muted py-3">No news yet.</li>
-        {% endfor %}
-      </ul>
+        <div class="empty-state"><i class="bi bi-newspaper"></i>No news yet.</div>
+        {% endif %}
+      </div>
     </div>
   </div>
 </div>
 
-<!-- Charts row: Signal distribution -->
-<div class="row g-3 mt-1">
-  <div class="col-md-5">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold">Signal Distribution (all time)</div>
-      <div class="card-body">
-        <canvas id="signalDistChart" height="200"></canvas>
+<!-- Charts row -->
+<div class="row g-3">
+  <div class="col-12 col-md-5">
+    <div class="mm-card">
+      <div class="mm-card-header"><span><i class="bi bi-pie-chart-fill"></i> Signal Distribution</span></div>
+      <div class="mm-card-body">
+        <div class="mm-chart-wrap"><canvas id="signalDistChart"></canvas></div>
       </div>
     </div>
   </div>
-  <div class="col-md-7">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold">Recent Alerts</div>
-      <div class="card-body p-0">
-        <table class="table table-sm table-hover mb-0">
-          <thead class="table-secondary">
+  <div class="col-12 col-md-7">
+    <div class="mm-card">
+      <div class="mm-card-header"><span><i class="bi bi-bell-fill"></i> Recent Alerts</span></div>
+      <div class="mm-card-body p0">
+        {% if alerts %}
+        <table class="mm-table">
+          <thead>
             <tr><th>Time</th><th>Symbol</th><th>Status</th><th>Subject</th></tr>
           </thead>
           <tbody>
             {% for a in alerts %}
             <tr>
-              <td class="small text-muted">{{ a.created_at[:16] if a.created_at else '-' }}</td>
-              <td>{{ a.symbol }}</td>
-              <td>{% if a.success %}<span class="badge bg-success">Sent</span>{% else %}<span class="badge bg-danger">Failed</span>{% endif %}</td>
-              <td class="small">{{ a.subject[:50] if a.subject else '-' }}</td>
+              <td style="white-space:nowrap;font-size:11px;color:var(--text-muted)">{{ a.created_at[:16] if a.created_at else '-' }}</td>
+              <td><strong>{{ a.symbol or 'MARKET' }}</strong></td>
+              <td>
+                {% if a.success %}<span class="status-sent">Sent</span>
+                {% else %}<span class="status-fail">Failed</span>{% endif %}
+              </td>
+              <td style="font-size:12px;color:var(--text-dim)">{{ a.subject[:45] if a.subject else '-' }}{% if a.subject and a.subject|length > 45 %}…{% endif %}</td>
             </tr>
-            {% else %}
-            <tr><td colspan="4" class="text-center text-muted py-3">No alerts yet.</td></tr>
             {% endfor %}
           </tbody>
         </table>
+        {% else %}
+        <div class="empty-state"><i class="bi bi-bell"></i>No alerts yet.</div>
+        {% endif %}
       </div>
     </div>
   </div>
 </div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Fetch signal distribution from API and draw pie chart
 fetch('/api/signals?limit=200')
   .then(r => r.json())
   .then(data => {
-    const counts = {BUY: 0, SELL: 0, HOLD: 0};
+    const counts = {BUY:0, SELL:0, HOLD:0};
     data.forEach(s => { if (counts[s.signal_type] !== undefined) counts[s.signal_type]++; });
-    const ctx = document.getElementById('signalDistChart');
-    new Chart(ctx, {
+    const canvas = document.getElementById('signalDistChart');
+    new Chart(canvas, {
       type: 'doughnut',
       data: {
         labels: ['BUY', 'SELL', 'HOLD'],
         datasets: [{
           data: [counts.BUY, counts.SELL, counts.HOLD],
-          backgroundColor: ['#198754', '#dc3545', '#ffc107'],
+          backgroundColor: ['#22c55e','#f87171','#fbbf24'],
+          borderWidth: 0,
         }]
       },
-      options: { plugins: { legend: { position: 'bottom' } }, cutout: '60%' }
+      options: {
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { color: '#94a3b8', padding: 14, font: {size: 12} }
+          }
+        },
+        cutout: '65%',
+      }
     });
-  });
+  }).catch(() => {});
 </script>
 {% endblock %}

@@ -1,49 +1,175 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f172a">
   <title>{% block title %}MarketMind AI{% endblock %}</title>
-  <!-- Bootstrap 5 -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Bootstrap Icons -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body class="bg-light">
+<body>
 
-<!-- Navbar -->
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
-  <div class="container-fluid">
-    <a class="navbar-brand fw-bold" href="/">
-      📊 MarketMind AI
+<!-- ── Top Navbar ─────────────────────────────────────────────────────────── -->
+<nav class="mm-navbar">
+  <div class="mm-navbar-inner">
+    <a class="mm-brand" href="/">
+      <span class="mm-brand-icon">📊</span>
+      <span class="mm-brand-text">MarketMind <span class="text-accent">AI</span></span>
     </a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div class="collapse navbar-collapse" id="navbarNav">
-      <ul class="navbar-nav me-auto">
-        <li class="nav-item"><a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
-        <li class="nav-item"><a class="nav-link" href="/alerts"><i class="bi bi-bell"></i> Alerts</a></li>
-      </ul>
-      <div class="d-flex gap-2">
-        <span id="pipeline-status" class="badge bg-secondary align-self-center">Idle</span>
-        <button class="btn btn-outline-success btn-sm" onclick="triggerPipeline()">
-          <i class="bi bi-play-fill"></i> Run Pipeline
-        </button>
-      </div>
+    <div class="mm-nav-links d-none d-lg-flex">
+      <a href="/" class="mm-nav-link {% if request.path == '/' %}active{% endif %}">
+        <i class="bi bi-speedometer2"></i> Dashboard
+      </a>
+      <a href="/alerts" class="mm-nav-link {% if request.path == '/alerts' %}active{% endif %}">
+        <i class="bi bi-bell"></i> Alerts
+      </a>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <span id="pipeline-badge" class="mm-badge badge-idle">
+        <i class="bi bi-circle-fill me-1" style="font-size:7px"></i>Idle
+      </span>
+      <button class="mm-btn-run d-none d-lg-flex" onclick="openRunModal()">
+        <i class="bi bi-play-fill"></i> Run Analysis
+      </button>
+      <button class="mm-icon-btn d-lg-none" onclick="openRunModal()" title="Run Analysis">
+        <i class="bi bi-play-circle-fill"></i>
+      </button>
+      <button class="mm-icon-btn" onclick="toggleTheme()" id="themeToggle" title="Toggle theme">
+        <i class="bi bi-moon-fill" id="themeIcon"></i>
+      </button>
     </div>
   </div>
 </nav>
 
-<div class="container-fluid py-3">
+<!-- ── Main Content ──────────────────────────────────────────────────────── -->
+<main class="mm-main">
   {% block content %}{% endblock %}
+</main>
+
+<!-- ── Mobile Bottom Nav ─────────────────────────────────────────────────── -->
+<nav class="mm-bottom-nav d-lg-none">
+  <a href="/" class="mm-bottom-item {% if request.path == '/' %}active{% endif %}">
+    <i class="bi bi-speedometer2"></i>
+    <span>Dashboard</span>
+  </a>
+  <a href="/alerts" class="mm-bottom-item {% if request.path == '/alerts' %}active{% endif %}">
+    <i class="bi bi-bell"></i>
+    <span>Alerts</span>
+  </a>
+  <button class="mm-bottom-item mm-bottom-run" onclick="openRunModal()">
+    <div class="mm-bottom-run-btn"><i class="bi bi-play-fill"></i></div>
+    <span>Run</span>
+  </button>
+</nav>
+
+<!-- ── Run Pipeline Modal ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="runModal" tabindex="-1" aria-labelledby="runModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+    <div class="modal-content mm-modal">
+      <div class="modal-header mm-modal-header">
+        <div>
+          <h5 class="modal-title mb-0" id="runModalLabel">
+            <i class="bi bi-cpu text-accent me-2"></i>Run Market Analysis
+          </h5>
+          <p class="text-muted small mb-0 mt-1">Select stocks and recipients, then run the full AI pipeline</p>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body p-0">
+        <!-- Step 1: Stock Selection -->
+        <div class="mm-section">
+          <div class="mm-section-header">
+            <span class="mm-step">1</span>
+            <div>
+              <div class="fw-semibold">Select Stocks</div>
+              <div class="text-muted small">Pick the NSE stocks to analyse</div>
+            </div>
+            <span class="ms-auto mm-selected-count" id="selectedCount">0 selected</span>
+          </div>
+
+          <!-- Search & Sector filter -->
+          <div class="d-flex gap-2 mb-3">
+            <div class="position-relative flex-grow-1">
+              <i class="bi bi-search mm-search-icon"></i>
+              <input type="text" id="stockSearch" class="form-control mm-search-input" 
+                     placeholder="Search stocks…" oninput="filterStocks(this.value)">
+            </div>
+            <button class="mm-btn-outline-sm" onclick="clearStockSelection()">Clear</button>
+          </div>
+
+          <!-- Sector tabs -->
+          <div class="mm-sector-tabs" id="sectorTabs">
+            <button class="mm-sector-tab active" onclick="filterSector('all', this)">All</button>
+          </div>
+
+          <!-- Stock chips grid -->
+          <div class="mm-stock-grid" id="stockGrid">
+            <div class="text-muted small text-center py-4">Loading stocks…</div>
+          </div>
+
+          <!-- Quick presets -->
+          <div class="mm-presets">
+            <span class="text-muted small me-2">Quick:</span>
+            <button class="mm-preset-btn" onclick="selectPreset(['TCS','INFY','WIPRO','HCLTECH'])">IT Top 4</button>
+            <button class="mm-preset-btn" onclick="selectPreset(['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK'])">Banking Top 4</button>
+            <button class="mm-preset-btn" onclick="selectPreset(['RELIANCE','ONGC','NTPC','TATAPOWER'])">Energy</button>
+            <button class="mm-preset-btn" onclick="selectPreset(['TCS','INFY','HDFCBANK','RELIANCE','DMART'])">Nifty Mix</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Email Recipients -->
+        <div class="mm-section">
+          <div class="mm-section-header">
+            <span class="mm-step">2</span>
+            <div>
+              <div class="fw-semibold">Email Recipients</div>
+              <div class="text-muted small">Add one or more email addresses to send the report</div>
+            </div>
+          </div>
+
+          <!-- Email tag input -->
+          <div class="mm-email-container" id="emailContainer" onclick="document.getElementById('emailInput').focus()">
+            <div id="emailTags" class="mm-email-tags"></div>
+            <input type="email" id="emailInput" class="mm-email-input"
+                   placeholder="Enter email and press Enter or comma…"
+                   onkeydown="handleEmailKey(event)"
+                   oninput="handleEmailInput(this)">
+          </div>
+          <div class="d-flex gap-2 mt-2 flex-wrap">
+            <button class="mm-preset-btn" onclick="addEmailTag('marketmindtw@gmail.com')">
+              <i class="bi bi-person-fill me-1"></i>Default Account
+            </button>
+          </div>
+          <div class="mt-2 text-muted" style="font-size:12px">
+            <i class="bi bi-info-circle me-1"></i>Press <kbd>Enter</kbd> or <kbd>,</kbd> after each email to add it as a tag
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer mm-modal-footer">
+        <div class="me-auto text-muted small" id="runSummary">Nothing selected</div>
+        <button class="mm-btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="mm-btn-primary" id="runBtn" onclick="launchPipeline()" disabled>
+          <i class="bi bi-play-fill me-1"></i>Run Analysis
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 
-<footer class="text-center text-muted py-3 mt-4 border-top small">
-  MarketMind AI – Automated Financial Intelligence | Not financial advice.
+<!-- ── Toast Container ────────────────────────────────────────────────────── -->
+<div class="position-fixed top-0 end-0 p-3" style="z-index:9999" id="toastContainer"></div>
+
+<!-- ── Footer ────────────────────────────────────────────────────────────── -->
+<footer class="mm-footer d-none d-lg-block">
+  MarketMind AI · Automated Financial Intelligence · Not financial advice
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
