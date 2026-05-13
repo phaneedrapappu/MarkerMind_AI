@@ -30,6 +30,20 @@ load_dotenv()
 from src.database.db_manager import DatabaseManager
 from src.orchestrator import AgentOrchestrator
 
+# Same catalog as main.py so the dashboard can offer stock discovery
+_NSE_STOCK_CATALOG = {
+    "IT": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM", "LTIM", "MPHASIS", "COFORGE", "PERSISTENT", "OFSS"],
+    "Banking": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSINDBK", "BANDHANBNK", "FEDERALBNK", "IDFCFIRSTB", "PNB"],
+    "Finance": ["BAJFINANCE", "BAJAJFINSV", "CHOLAFIN", "MUTHOOTFIN", "MANAPPURAM", "LICHSGFIN", "RECLTD", "PFC"],
+    "Auto": ["MARUTI", "TATAMOTORS", "M&M", "BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "TVSMOTOR", "ASHOKLEY"],
+    "Pharma": ["SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB", "AUROPHARMA", "TORNTPHARM", "ALKEM", "BIOCON"],
+    "FMCG": ["HINDUNILVR", "ITC", "NESTLEIND", "BRITANNIA", "DABUR", "MARICO", "COLPAL", "GODREJCP"],
+    "Energy": ["RELIANCE", "ONGC", "NTPC", "POWERGRID", "ADANIGREEN", "TATAPOWER", "ADANIPORTS", "COALINDIA"],
+    "Retail/Consumer": ["DMART", "TITAN", "TRENT", "NYKAA", "ZOMATO", "PAYTM", "NAUKRI", "IRCTC"],
+    "Metals": ["TATASTEEL", "JSWSTEEL", "HINDALCO", "VEDL", "SAIL", "NMDC", "NATIONALUM"],
+    "Infra/Cement": ["ULTRACEMCO", "GRASIM", "AMBUJACEM", "ACC", "SHREECEM", "DALMIACEMX", "LT", "SIEMENS"],
+}
+
 app = Flask(__name__, template_folder="frontend/templates", static_folder="frontend/static")
 CORS(app)
 
@@ -149,17 +163,39 @@ def api_alerts():
 
 @app.route("/api/run", methods=["POST"])
 def api_run_pipeline():
-    """Trigger a full pipeline run in a background thread."""
+    """
+    Trigger a full pipeline run in a background thread.
+    Optional JSON body:
+      {
+        "stocks": ["TCS", "INFY"],          // override tracked stocks
+        "email":  ["you@gmail.com"]          // override recipients
+      }
+    """
     global _pipeline_running
     if not _pipeline_lock.acquire(blocking=False):
         return jsonify({"status": "already_running"}), 409
-    
+
     _pipeline_running = True
+
+    # Parse optional overrides from request body
+    body = request.get_json(silent=True) or {}
+    overrides = {}
+    if body.get("stocks"):
+        if isinstance(body["stocks"], str):
+            overrides["stocks"] = [s.strip().upper() for s in body["stocks"].split(",") if s.strip()]
+        else:
+            overrides["stocks"] = [s.strip().upper() for s in body["stocks"] if s.strip()]
+    if body.get("email"):
+        if isinstance(body["email"], str):
+            overrides["recipients"] = [e.strip() for e in body["email"].split(",") if e.strip()]
+        else:
+            overrides["recipients"] = [e.strip() for e in body["email"] if e.strip()]
 
     def _run():
         global _pipeline_running
         try:
             orch = AgentOrchestrator(CONFIG_PATH)
+            orch.apply_overrides(overrides)
             orch.initialize_agents()
             orch.run_agents()
             orch.stop_agents()
@@ -168,12 +204,27 @@ def api_run_pipeline():
             _pipeline_lock.release()
 
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"status": "started"})
+    return jsonify({"status": "started", "overrides": overrides})
 
 
 @app.route("/api/pipeline/status")
 def api_pipeline_status():
     return jsonify({"running": _pipeline_running})
+
+
+@app.route("/api/stocks")
+def api_stocks():
+    """Return the NSE stock catalog grouped by sector."""
+    keyword = request.args.get("search", "").strip().upper()
+    if keyword:
+        filtered = {
+            sector: tickers
+            for sector, tickers in _NSE_STOCK_CATALOG.items()
+            if keyword in sector.upper()
+            or any(keyword in t for t in tickers)
+        }
+        return jsonify(filtered)
+    return jsonify(_NSE_STOCK_CATALOG)
 
 
 # ── Static chart serving ───────────────────────────────────────────────────────

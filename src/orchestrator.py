@@ -45,6 +45,26 @@ class AgentOrchestrator:
             print(f"Error loading config: {exc}")
             return {}
 
+    def apply_overrides(self, overrides: Dict[str, Any]):
+        """
+        Apply runtime overrides before initialize_agents() is called.
+        Supported keys:
+          stocks     – list[str] of NSE symbols, replaces config stocks list
+          recipients – list[str] of email addresses, replaces config recipients
+        """
+        if not overrides:
+            return
+        agent_cfgs = self.config.setdefault("agents", {})
+
+        if "stocks" in overrides:
+            mda = agent_cfgs.setdefault("market_data_agent", {})
+            mda["stocks"] = overrides["stocks"]
+
+        if "recipients" in overrides:
+            email_cfg = agent_cfgs.setdefault("email_alert_agent", {})
+            smtp = email_cfg.setdefault("smtp", {})
+            smtp["recipients"] = overrides["recipients"]
+
     def _setup_logging(self):
         log_cfg = self.config.get("logging", {})
         log_level = getattr(logging, log_cfg.get("level", "INFO"))

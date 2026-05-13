@@ -113,6 +113,10 @@ class NewsAgent(BaseAgent):
         logger.info(f"News Agent fetched {len(unique_news)} unique articles")
         return unique_news
 
+    def cleanup(self):
+        """Cleanup resources"""
+        self.logger.info("NewsAgent cleanup")
+
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _fetch_feed(self, url: str, symbol: Optional[str]) -> List[Dict[str, Any]]:

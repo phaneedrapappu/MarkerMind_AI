@@ -7,9 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from datetime import date as date_type
+
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean,
-    DateTime, Text, ForeignKey, JSON
+    DateTime, Text, ForeignKey, JSON, func
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from sqlalchemy.exc import SQLAlchemyError
@@ -150,7 +152,23 @@ class DatabaseManager:
     # ── Stock Data ──────────────────────────────────────────────────────────
 
     def save_stock_data(self, stock_dict: Dict[str, Any]) -> int:
+        """Upsert stock data – if a record for the same symbol exists from today, update it."""
         with self.session() as sess:
+            today = datetime.utcnow().date()
+            existing = (
+                sess.query(StockDataRecord)
+                .filter(
+                    StockDataRecord.symbol == stock_dict.get("symbol", "").upper(),
+                    func.date(StockDataRecord.timestamp) == today,
+                )
+                .order_by(StockDataRecord.timestamp.desc())
+                .first()
+            )
+            if existing:
+                for k, v in stock_dict.items():
+                    setattr(existing, k, v)
+                sess.commit()
+                return existing.id
             record = StockDataRecord(**stock_dict)
             sess.add(record)
             sess.commit()
@@ -197,7 +215,22 @@ class DatabaseManager:
     # ── Analysis Reports ────────────────────────────────────────────────────
 
     def save_analysis_report(self, report_dict: Dict[str, Any]) -> int:
+        """Upsert – update if a report for the same symbol already exists today."""
         with self.session() as sess:
+            today = datetime.utcnow().date()
+            existing = (
+                sess.query(AnalysisReportRecord)
+                .filter(
+                    AnalysisReportRecord.symbol == report_dict.get("symbol", "").upper(),
+                    func.date(AnalysisReportRecord.analysis_date) == today,
+                )
+                .first()
+            )
+            if existing:
+                for k, v in report_dict.items():
+                    setattr(existing, k, v)
+                sess.commit()
+                return existing.id
             record = AnalysisReportRecord(**report_dict)
             sess.add(record)
             sess.commit()
@@ -217,16 +250,46 @@ class DatabaseManager:
     # ── Trading Signals ─────────────────────────────────────────────────────
 
     def save_trading_signal(self, signal_dict: Dict[str, Any]) -> int:
+        """Upsert – update if a signal for the same symbol already exists today."""
         with self.session() as sess:
+            today = datetime.utcnow().date()
+            existing = (
+                sess.query(TradingSignalRecord)
+                .filter(
+                    TradingSignalRecord.symbol == signal_dict.get("symbol", "").upper(),
+                    func.date(TradingSignalRecord.signal_date) == today,
+                )
+                .first()
+            )
+            if existing:
+                for k, v in signal_dict.items():
+                    setattr(existing, k, v)
+                sess.commit()
+                return existing.id
             record = TradingSignalRecord(**signal_dict)
             sess.add(record)
             sess.commit()
             return record.id
 
     def get_latest_signals(self, limit: int = 20) -> List[Dict]:
+        """Return the single latest signal per symbol (no duplicates in UI)."""
         with self.session() as sess:
+            # Subquery: latest signal_date per symbol
+            subq = (
+                sess.query(
+                    TradingSignalRecord.symbol,
+                    func.max(TradingSignalRecord.signal_date).label("max_date"),
+                )
+                .group_by(TradingSignalRecord.symbol)
+                .subquery()
+            )
             rows = (
                 sess.query(TradingSignalRecord)
+                .join(
+                    subq,
+                    (TradingSignalRecord.symbol == subq.c.symbol)
+                    & (TradingSignalRecord.signal_date == subq.c.max_date),
+                )
                 .order_by(TradingSignalRecord.signal_date.desc())
                 .limit(limit)
                 .all()
@@ -247,10 +310,21 @@ class DatabaseManager:
     # ── News ────────────────────────────────────────────────────────────────
 
     def save_news(self, records: List[Dict]) -> None:
+        """Insert news articles – skip duplicates by URL."""
         with self.session() as sess:
-            for r in records:
-                sess.add(NewsRecord(**r))
-            sess.commit()
+            # Build set of already-stored URLs to avoid duplicates
+            existing_urls = {
+                row[0] for row in sess.query(NewsRecord.url).filter(
+                    NewsRecord.url.isnot(None)
+                ).all()
+            }
+            new_records = [
+                NewsRecord(**r) for r in records
+                if r.get("url") not in existing_urls
+            ]
+            if new_records:
+                sess.add_all(new_records)
+                sess.commit()
 
     def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> List[Dict]:
         with self.session() as sess:
@@ -282,15 +356,29 @@ class DatabaseManager:
     # ── Dashboard summary ───────────────────────────────────────────────────
 
     def get_dashboard_summary(self) -> Dict[str, Any]:
-        """Return counts for display on dashboard."""
+        """Return counts and today's fresh data for dashboard display."""
         with self.session() as sess:
+            today = datetime.utcnow().date()
             return {
                 "total_stocks_tracked": sess.query(StockDataRecord.symbol).distinct().count(),
-                "total_signals": sess.query(TradingSignalRecord).count(),
-                "total_news": sess.query(NewsRecord).count(),
-                "total_alerts_sent": sess.query(AlertRecord).filter(AlertRecord.success == True).count(),
+                # Count distinct symbols with a signal today (not all-time rows)
+                "total_signals": (
+                    sess.query(TradingSignalRecord.symbol).distinct()
+                    .filter(func.date(TradingSignalRecord.signal_date) == today)
+                    .count()
+                ),
+                # Count unique news articles (by URL)
+                "total_news": (
+                    sess.query(func.count(func.distinct(NewsRecord.url)))
+                    .scalar() or 0
+                ),
+                "total_alerts_sent": (
+                    sess.query(AlertRecord)
+                    .filter(AlertRecord.success == True)
+                    .count()
+                ),
                 "latest_signals": self.get_latest_signals(5),
-                "latest_news": self.get_news(limit=5)
+                "latest_news": self.get_news(limit=5),
             }
 
     # ── Helpers ─────────────────────────────────────────────────────────────

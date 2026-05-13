@@ -43,6 +43,10 @@ class ReportGeneratorAgent(BaseAgent):
             logger.error(f"Report Generator init failed: {exc}")
             return False
 
+    def cleanup(self):
+        """Cleanup resources"""
+        self.logger.info("ReportGeneratorAgent cleanup")
+
     # ── Public interface ───────────────────────────────────────────────────────
 
     def execute(

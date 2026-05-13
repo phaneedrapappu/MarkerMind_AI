@@ -77,6 +77,10 @@ class EmailAlertAgent(BaseAgent):
         )
         return True
 
+    def cleanup(self):
+        """Cleanup resources"""
+        self.logger.info("EmailAlertAgent cleanup")
+
     # ── Public interface ───────────────────────────────────────────────────────
 
     def execute(
