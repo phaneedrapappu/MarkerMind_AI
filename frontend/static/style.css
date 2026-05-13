@@ -1,0 +1,50 @@
+/* MarketMind AI – Custom Styles */
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+.navbar-brand {
+  letter-spacing: 0.5px;
+}
+
+.card {
+  border: none;
+  border-radius: 10px;
+}
+
+.card-header {
+  background: #f8f9fa;
+  border-bottom: 1px solid #eee;
+  border-radius: 10px 10px 0 0 !important;
+}
+
+table th {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.badge {
+  font-weight: 600;
+}
+
+a {
+  color: inherit;
+}
+
+.list-group-item {
+  border-left: none;
+  border-right: none;
+}
+
+/* Pipeline status badge animation */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+#pipeline-status.running {
+  animation: pulse 1s infinite;
+}

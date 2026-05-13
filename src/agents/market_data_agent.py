@@ -1,5 +1,7 @@
 """
-Market Data Agent - Fetches and processes market data
+Market Data Agent - Fetches and processes market data.
+Primary source: NSE India API.
+Fallback: yfinance (Yahoo Finance) when NSE is unreachable.
 """
 import logging
 from typing import Dict, List, Any, Optional
@@ -13,25 +15,27 @@ from ..models.market_data import (
     PromoterHolding, MarketDataSnapshot, TransactionType
 )
 
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+
 
 class MarketDataAgent(BaseAgent):
     """
     Market Data Agent - Responsible for fetching stock market data
-    including buy/sell activity, bulk/block deals, and institutional flows
+    including buy/sell activity, bulk/block deals, and institutional flows.
+    Falls back to yfinance when NSE API is unreachable.
     """
     
-    def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize Market Data Agent
-        
-        Args:
-            config: Configuration dictionary
-        """
+    def __init__(self, config: Dict[str, Any], db_manager=None):
         super().__init__("MarketDataAgent", config)
         self.stocks = config.get('stocks', [])
         self.data_sources = config.get('data_sources', ['NSE'])
         self.nse_fetcher: Optional[NSEDataFetcher] = None
         self.collected_data: List[MarketDataSnapshot] = []
+        self.db = db_manager
         
     def initialize(self) -> bool:
         """
@@ -75,14 +79,30 @@ class MarketDataAgent(BaseAgent):
                 if snapshot:
                     self.collected_data.append(snapshot)
                     self.logger.info(f"Successfully fetched data for {stock_symbol}")
-                    
-                    # Print summary
                     self._print_stock_summary(snapshot)
+                    # Persist to DB
+                    if self.db:
+                        try:
+                            self.db.save_stock_data({
+                                "symbol": snapshot.stock_data.symbol,
+                                "company_name": snapshot.stock_data.company_name,
+                                "timestamp": snapshot.stock_data.timestamp,
+                                "price": snapshot.stock_data.price,
+                                "open_price": snapshot.stock_data.open_price,
+                                "high": snapshot.stock_data.high,
+                                "low": snapshot.stock_data.low,
+                                "close_price": snapshot.stock_data.close_price,
+                                "volume": snapshot.stock_data.volume,
+                                "change": snapshot.stock_data.change,
+                                "change_percent": snapshot.stock_data.change_percent,
+                                "source": snapshot.stock_data.source,
+                            })
+                        except Exception as db_exc:
+                            self.logger.warning(f"DB persist failed for {stock_symbol}: {db_exc}")
                 else:
                     self.logger.warning(f"No data fetched for {stock_symbol}")
                 
-                # Rate limiting between requests
-                time.sleep(1)
+                time.sleep(1)   # Rate limit
                 
             except Exception as e:
                 self.logger.error(f"Error fetching data for {stock_symbol}: {e}")
@@ -91,20 +111,21 @@ class MarketDataAgent(BaseAgent):
     
     def _fetch_stock_data(self, symbol: str) -> Optional[MarketDataSnapshot]:
         """
-        Fetch complete data for a single stock
-        
-        Args:
-            symbol: Stock symbol
-            
-        Returns:
-            MarketDataSnapshot or None
+        Fetch complete data for a single stock.
+        Tries NSE first; falls back to yfinance if NSE is unavailable.
         """
         if not self.nse_fetcher:
             self.logger.error("NSE fetcher not initialized")
             return None
         
-        # Fetch stock quote
+        # Attempt NSE
         quote_data = self.nse_fetcher.get_stock_quote(symbol)
+
+        # yfinance fallback
+        if not quote_data and YFINANCE_AVAILABLE:
+            self.logger.warning(f"NSE fetch failed for {symbol}, trying yfinance …")
+            quote_data = self._fetch_via_yfinance(symbol)
+        
         if not quote_data:
             return None
         
@@ -121,10 +142,10 @@ class MarketDataAgent(BaseAgent):
             volume=quote_data['volume'],
             change=quote_data['change'],
             change_percent=quote_data['change_percent'],
-            source='NSE'
+            source=quote_data.get('source', 'NSE')
         )
         
-        # Fetch bulk deals (try to get, but don't fail if unavailable)
+        # Fetch bulk deals
         bulk_deals = []
         try:
             bulk_deals_data = self.nse_fetcher.get_bulk_deals()
@@ -148,14 +169,43 @@ class MarketDataAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"Could not fetch FII/DII data: {e}")
         
-        # Create snapshot
         snapshot = MarketDataSnapshot(
             stock_data=stock_data,
             bulk_block_deals=bulk_deals + block_deals,
             institutional_activity=institutional_activity
         )
-        
         return snapshot
+
+    def _fetch_via_yfinance(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch basic quote data from Yahoo Finance (NS suffix for NSE stocks)."""
+        try:
+            ticker_sym = f"{symbol}.NS"
+            ticker = yf.Ticker(ticker_sym)
+            info = ticker.fast_info
+            hist = ticker.history(period="1d")
+            if hist.empty:
+                return None
+            row = hist.iloc[-1]
+            prev_close = info.previous_close or row["Close"]
+            change = row["Close"] - prev_close
+            change_pct = (change / prev_close * 100) if prev_close else 0
+            return {
+                "symbol": symbol.upper(),
+                "company_name": ticker.info.get("longName", symbol),
+                "timestamp": datetime.now(),
+                "price": float(row["Close"]),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": int(row["Volume"]),
+                "change": float(change),
+                "change_percent": float(change_pct),
+                "source": "Yahoo Finance",
+            }
+        except Exception as exc:
+            self.logger.error(f"yfinance fetch failed for {symbol}: {exc}")
+            return None
     
     def _parse_bulk_deals(self, deals_data: List[Dict], symbol: str) -> List[BulkBlockDeal]:
         """Parse bulk deals data"""

@@ -4,32 +4,47 @@
 agents:
   market_data_agent:
     enabled: true
-    fetch_interval: 300  # seconds (5 minutes)
+    fetch_interval: 300       # seconds (5 minutes)
     stocks:
       - "TCS"
       - "WIPRO"
       - "DMART"
+      - "RELIANCE"
+      - "INFY"
     data_sources:
       - "NSE"
-  
+
+  news_agent:
+    enabled: true
+    fetch_interval: 600       # 10 minutes
+    max_articles_per_stock: 5
+    lookback_hours: 24
+
   ai_analysis_agent:
     enabled: true
-    model: "gpt-4o-mini"  # Cost-effective GPT model
-    # api_key: ""  # Or set OPENAI_API_KEY environment variable
-  
+    provider: "gemini"        # "gemini" or "openai"
+    model: "gemini-1.5-flash" # For Gemini: gemini-1.5-flash, gemini-1.5-pro
+                              # For OpenAI: gpt-4o-mini, gpt-4, etc.
+    # API keys must be set as environment variables: GEMINI_API_KEY or OPENAI_API_KEY
+
   signal_generator_agent:
     enabled: true
-    risk_tolerance: "medium"  # low/medium/high
-  
-  news_agent:
-    enabled: false
-    fetch_interval: 600
-  
-  alert_agent:
-    enabled: false
-  
-  unusual_activity_agent:
-    enabled: false
+    risk_tolerance: "medium"  # low / medium / high
+
+  report_generator_agent:
+    enabled: true
+
+  email_alert_agent:
+    enabled: true
+    smtp:
+      host: "smtp.gmail.com"
+      port: 587
+      use_tls: true           # STARTTLS
+      use_ssl: false
+      sender: ""              # e.g. marketmind@gmail.com  (set in .env)
+      recipients:
+        - ""                  # Add recipient emails here
+    # SMTP_USER and SMTP_PASSWORD must be set as environment variables
 
 # Data Sources
 data_sources:
@@ -40,9 +55,9 @@ data_sources:
     base_url: "https://www.bseindia.com"
     timeout: 30
 
-# Database
+# Database (SQLite – production can use PostgreSQL via SQLAlchemy URL)
 database:
-  type: "sqlite"  # For now, using SQLite; can upgrade to PostgreSQL
+  type: "sqlite"
   path: "data/marketmind.db"
 
 # Logging
@@ -51,12 +66,7 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/marketmind.log"
 
-# Message Queue (for future use)
-message_queue:
-  type: "in-memory"  # Can upgrade to RabbitMQ/Kafka later
-  
-# Notifications
-notifications:
-  whatsapp:
-    enabled: false
-    api_key: ""
+# Scheduler (for continuous mode)
+scheduler:
+  run_interval_minutes: 30   # Full pipeline run every 30 minutes
+

@@ -1,6 +1,203 @@
-# MarketMind AI 🤖
+# 📊 MarketMind AI – Financial Intelligence Agent System
 
-A **multi-agent AI ecosystem** for financial intelligence, designed to help retail investors and traders make faster and smarter market decisions using real-time institutional activity, AI-powered analysis, and intelligent trading signals.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![Flask](https://img.shields.io/badge/Flask-3.0-green)](https://flask.palletsprojects.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+MarketMind AI is an autonomous multi-agent system that monitors Indian stock markets (NSE), generates AI-powered trading signals, and delivers rich HTML email digests with embedded charts – all without manual intervention.
+
+---
+
+## Architecture – Agent Pipeline
+
+```
+MarketDataAgent  →  NSE API / yfinance fallback
+       ↓
+  NewsAgent       →  RSS feeds (Google News, ET Markets, Moneycontrol)
+       ↓
+AIAnalysisAgent   →  OpenAI GPT (single batched API call per cycle)
+       ↓
+SignalGenerator   →  Rule-based BUY / HOLD / SELL scoring
+       ↓
+ReportGenerator   →  matplotlib charts (price, signal, news sentiment)
+       ↓
+EmailAlertAgent   →  HTML email digest with embedded charts
+       ↓
+  SQLite DB       ←  Every stage persists results
+       ↓
+  Flask Dashboard →  Browser UI (dashboard, stock detail, alerts)
+```
+
+---
+
+## Quick Start
+
+### 1. Prerequisites
+
+- Python 3.10 or higher
+- An [OpenAI API key](https://platform.openai.com/api-keys) (for `gpt-4o-mini`)
+- A Gmail account with an [App Password](https://myaccount.google.com/apppasswords) for email alerts (optional but recommended)
+
+### 2. Clone & Install
+
+```bash
+git clone <repo-url>
+cd MarkerMind_AI
+
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+pip install -r requirements.txt
+```
+
+### 3. Configure Environment Variables
+
+```bash
+cp .env.example .env
+# Edit .env and fill in:
+#   OPENAI_API_KEY  – your OpenAI key
+#   SMTP_USER       – your Gmail address
+#   SMTP_PASSWORD   – Gmail App Password
+```
+
+### 4. Configure Stocks & Recipients
+
+Edit `config/config.yaml`:
+
+```yaml
+agents:
+  market_data_agent:
+    stocks:
+      - "TCS"
+      - "WIPRO"
+      - "RELIANCE"
+      # Add more NSE symbols …
+
+  email_alert_agent:
+    smtp:
+      sender: "your_email@gmail.com"
+      recipients:
+        - "recipient1@example.com"
+        - "recipient2@example.com"
+```
+
+### 5. Run the Agent Pipeline (CLI)
+
+**Run once:**
+```bash
+python main.py
+```
+
+**Run on a repeating schedule** (interval in `config.yaml → scheduler.run_interval_minutes`):
+```bash
+python main.py --schedule
+```
+
+### 6. Run the Web Dashboard
+
+```bash
+python app.py
+# Open http://localhost:5050 in your browser
+```
+
+The dashboard lets you:
+- View latest trading signals, news, and email alert history
+- Drill into any stock for price history, AI analysis, and charts
+- Trigger a pipeline run via the **Run Pipeline** button
+
+---
+
+## Project Structure
+
+```
+MarkerMind_AI/
+├── main.py                     # CLI entry point
+├── app.py                      # Flask web dashboard
+├── config/
+│   └── config.yaml             # All agent configuration (non-sensitive)
+├── .env.example                # Template for secrets
+├── requirements.txt
+├── src/
+│   ├── orchestrator.py         # 6-stage agent pipeline
+│   ├── agents/
+│   │   ├── base_agent.py
+│   │   ├── market_data_agent.py    # NSE + yfinance fallback
+│   │   ├── news_agent.py           # RSS news fetcher
+│   │   ├── ai_analysis_agent.py    # Batched GPT analysis
+│   │   ├── signal_generator_agent.py
+│   │   ├── report_generator_agent.py # matplotlib charts
+│   │   └── email_alert_agent.py    # HTML email with charts
+│   ├── data_sources/
+│   │   └── nse_fetcher.py
+│   ├── database/
+│   │   └── db_manager.py       # SQLite / SQLAlchemy ORM
+│   └── models/
+│       ├── market_data.py
+│       └── analysis_models.py
+├── frontend/
+│   ├── templates/              # Jinja2 HTML templates
+│   │   ├── base.html
+│   │   ├── dashboard.html
+│   │   ├── stock_detail.html
+│   │   └── alerts.html
+│   └── static/                 # CSS + JS
+│       ├── style.css
+│       └── main.js
+├── data/
+│   ├── marketmind.db           # SQLite database (auto-created)
+│   └── reports/                # Generated PNG charts
+└── logs/
+    └── marketmind.log
+```
+
+---
+
+## Security Compliance
+
+| Concern | Implementation |
+|---|---|
+| API credentials | Loaded from environment variables only (`.env`); never in code or config.yaml |
+| SMTP password | `SMTP_PASSWORD` env var; STARTTLS enforced by default |
+| `.env` in git | `.gitignore` must include `.env` |
+| SQL injection | SQLAlchemy ORM parameterised queries |
+| Rate limiting | 1 s sleep between NSE requests; batched LLM calls |
+| Error handling | Every agent stage is try/caught; failures don't crash the pipeline |
+
+---
+
+## Use Cases
+
+1. **Daily Market Digest** – Automated morning email with price snapshots, signals, and news sentiment for a custom watchlist.
+2. **Bulk/Block Deal Alerts** – Detect and report large institutional block deals as they appear.
+3. **FII/DII Flow Tracking** – Monitor foreign and domestic institutional activity across the index.
+4. **Signal History** – SQLite DB stores every BUY/SELL/HOLD signal for back-inspection.
+5. **News Sentiment Monitoring** – RSS-aggregated headline sentiment per stock.
+6. **Web Dashboard** – Always-on browser UI for quick market checks without running the CLI.
+
+---
+
+## LLM Cost Optimisation
+
+- All stocks in a watchlist are analysed in **one batched GPT prompt** per cycle (not one call per stock).
+- Uses `gpt-4o-mini` by default – the most cost-effective OpenAI chat model.
+- Rule-based signal scoring requires **zero LLM calls** on its own.
+- News sentiment is done locally with keyword matching (no LLM needed).
+
+---
+
+## Extending the System
+
+- **Add a new stock**: append the symbol to `config.yaml → agents.market_data_agent.stocks`.
+- **Change the LLM model**: set `agents.ai_analysis_agent.model` in config.yaml.
+- **Use PostgreSQL** instead of SQLite: change the `db_path` to a SQLAlchemy URL and update `db_manager.py → create_engine`.
+- **Add more data sources**: extend `src/data_sources/` and wire into `MarketDataAgent`.
+
+---
+
+## Disclaimer
+
+MarketMind AI is an educational/research tool. Nothing it generates constitutes financial advice. Always conduct your own due diligence before making investment decisions.
+
 
 ## 🌟 Features
 

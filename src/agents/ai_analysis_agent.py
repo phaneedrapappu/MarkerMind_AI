@@ -1,11 +1,17 @@
 """
-AI Analysis Agent - Uses GPT to analyze market data
+AI Analysis Agent - Analyses market data via LLM (Gemini or OpenAI).
+All stocks are sent in ONE batched prompt to minimise API cost.
+
+Provider selection (via config.yaml or LLM_PROVIDER env var):
+  gemini  – Google Gemini (default, free tier available)
+  openai  – OpenAI GPT (paid)
 """
 import logging
 import os
+import json
+import re
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-import json
 
 from ..agents.base_agent import BaseAgent
 from ..models.market_data import MarketDataSnapshot
@@ -13,6 +19,14 @@ from ..models.analysis_models import (
     AIAnalysisReport, DailyTradingAnalysis, BulkBlockAnalysis,
     InstitutionalAnalysis, PromoterAnalysis
 )
+
+# ── Provider availability checks ───────────────────────────────────────────────
+try:
+    from google import genai as google_genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    google_genai = None
 
 try:
     from openai import OpenAI
@@ -24,125 +38,251 @@ except ImportError:
 
 class AIAnalysisAgent(BaseAgent):
     """
-    AI Analysis Agent - Analyzes market data using GPT
+    AI Analysis Agent - Analyzes market data via Gemini (default) or OpenAI.
+    Provider and model configurable via config.yaml or environment variables.
+    All stocks are analysed in a single batched LLM call to save cost.
     """
-    
-    def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize AI Analysis Agent
-        
-        Args:
-            config: Configuration dictionary
-        """
+
+    def __init__(self, config: Dict[str, Any], db_manager=None):
         super().__init__("AIAnalysisAgent", config)
-        self.api_key = config.get('api_key') or os.getenv('OPENAI_API_KEY')
-        self.model = config.get('model', 'gpt-4o-mini')  # Cost-effective model
-        self.client: Optional[OpenAI] = None
+        self.db = db_manager
         self.analysis_results: List[AIAnalysisReport] = []
-        
+
+        # ── Provider selection ─────────────────────────────────────────────────
+        # Read from config first, then env var fallback
+        self.llm_provider = (
+            config.get("provider", "").strip().lower() or
+            os.getenv("LLM_PROVIDER", "gemini").lower().strip()
+        )
+
+        # Gemini settings
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        self.gemini_model_name = (
+            config.get("model", "").strip() or
+            os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+        )
+        self._gemini_client = None   # initialised in initialize()
+
+        # OpenAI settings
+        self.openai_api_key = config.get("api_key") or os.getenv("OPENAI_API_KEY", "")
+        self.openai_model = (
+            config.get("model", "").strip() or
+            config.get("openai_model", "gpt-4o-mini").strip()
+        )
+        self._openai_client = None
+
+        # model label shown in logs / DB
+        self.model = (
+            self.gemini_model_name if self.llm_provider == "gemini"
+            else self.openai_model
+        )
+
     def initialize(self) -> bool:
-        """
-        Initialize the agent
-        
-        Returns:
-            True if successful
-        """
         try:
-            self.logger.info("Initializing AI Analysis Agent")
-            
-            if not OPENAI_AVAILABLE:
-                self.logger.error("OpenAI library not installed. Run: pip install openai")
+            self.logger.info(f"Initialising AI Analysis Agent  [provider={self.llm_provider}]")
+
+            if self.llm_provider == "gemini":
+                if not GEMINI_AVAILABLE:
+                    self.logger.error("google-genai not installed. Run: pip install google-genai")
+                    return False
+                if not self.gemini_api_key:
+                    self.logger.error("GEMINI_API_KEY env var not set.")
+                    return False
+                self._gemini_client = google_genai.Client(api_key=self.gemini_api_key)
+                self.logger.info(f"Gemini client ready – model: {self.gemini_model_name}")
+
+            elif self.llm_provider == "openai":
+                if not OPENAI_AVAILABLE:
+                    self.logger.error("openai package not installed. Run: pip install openai")
+                    return False
+                if not self.openai_api_key:
+                    self.logger.error("OPENAI_API_KEY env var not set.")
+                    return False
+                self._openai_client = OpenAI(api_key=self.openai_api_key)
+                self.logger.info(f"OpenAI client ready – model: {self.openai_model}")
+
+            else:
+                self.logger.error(f"Unknown LLM_PROVIDER '{self.llm_provider}'. Use 'gemini' or 'openai'.")
                 return False
-            
-            if not self.api_key:
-                self.logger.error("OpenAI API key not found. Set OPENAI_API_KEY environment variable or in config.")
-                return False
-            
-            # Initialize OpenAI client
-            self.client = OpenAI(api_key=self.api_key)
-            
-            self.logger.info(f"AI Analysis Agent initialized with model: {self.model}")
+
             return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize AI Analysis Agent: {e}")
+
+        except Exception as exc:
+            self.logger.error(f"Failed to initialise AI Analysis Agent: {exc}")
             return False
     
     def execute(self, market_data: List[MarketDataSnapshot]) -> List[AIAnalysisReport]:
         """
-        Execute the agent - analyze market data using GPT
-        
-        Args:
-            market_data: List of MarketDataSnapshot objects from Market Data Agent
-            
-        Returns:
-            List of AIAnalysisReport objects
+        Execute the agent – analyse all stocks in a SINGLE batched LLM call.
+        Falls back to per-stock calls if JSON parsing fails.
         """
         self.log_execution()
-        self.logger.info(f"Analyzing {len(market_data)} stock(s) using GPT")
-        
+        self.logger.info(f"Batch-analysing {len(market_data)} stock(s) using {self.model}")
+
         self.analysis_results = []
-        
-        for snapshot in market_data:
-            try:
-                self.logger.info(f"Analyzing {snapshot.stock_data.symbol}")
-                analysis = self._analyze_snapshot(snapshot)
-                
-                if analysis:
-                    self.analysis_results.append(analysis)
-                    self._print_analysis_summary(analysis)
-                else:
-                    self.logger.warning(f"No analysis generated for {snapshot.stock_data.symbol}")
-                    
-            except Exception as e:
-                self.logger.error(f"Error analyzing {snapshot.stock_data.symbol}: {e}")
-        
+
+        if not market_data:
+            return self.analysis_results
+
+        try:
+            self.analysis_results = self._batch_analyze(market_data)
+        except Exception as exc:
+            self.logger.warning(f"Batch analysis failed ({exc}), falling back to per-stock mode")
+            for snapshot in market_data:
+                try:
+                    analysis = self._analyze_snapshot(snapshot)
+                    if analysis:
+                        self.analysis_results.append(analysis)
+                        self._print_analysis_summary(analysis)
+                except Exception as inner_exc:
+                    self.logger.error(f"Error analysing {snapshot.stock_data.symbol}: {inner_exc}")
+
+        # Persist to DB
+        if self.db:
+            for analysis in self.analysis_results:
+                try:
+                    self.db.save_analysis_report({
+                        "symbol": analysis.symbol,
+                        "analysis_date": analysis.timestamp,
+                        "model_used": self.model,
+                        "raw_llm_response": analysis.raw_llm_response,
+                        "overall_sentiment": analysis.overall_sentiment,
+                        "signal_strength": 0.0,
+                        "summary": "; ".join(analysis.key_highlights[:3]),
+                    })
+                except Exception as db_exc:
+                    self.logger.warning(f"DB persist failed for {analysis.symbol}: {db_exc}")
+
         return self.analysis_results
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _extract_json(self, text: str):
+        """Robustly extract a JSON object/array from an LLM response."""
+        text = text.strip()
+        # 1. Direct parse
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        # 2. Fenced code block
+        m = re.search(r"```(?:json)?\s*([\[\{][\s\S]*?[\]\}])\s*```", text)
+        if m:
+            return json.loads(m.group(1))
+        # 3. First JSON array or object found anywhere
+        m = re.search(r"([\[\{][\s\S]*[\]\}])", text)
+        if m:
+            return json.loads(m.group(1))
+        raise ValueError("No valid JSON found in LLM response")
+
+    def _call_llm(self, system_msg: str, user_msg: str) -> str:
+        """Route the LLM call to the configured provider. Returns raw text."""
+        if self.llm_provider == "gemini":
+            if not self._gemini_client:
+                raise RuntimeError("Gemini client not initialised")
+            full_prompt = f"{system_msg}\n\n{user_msg}"
+            response = self._gemini_client.models.generate_content(
+                model=self.gemini_model_name,
+                contents=full_prompt,
+            )
+            return response.text or ""
+
+        elif self.llm_provider == "openai":
+            if not self._openai_client:
+                raise RuntimeError("OpenAI client not initialised")
+            response = self._openai_client.chat.completions.create(
+                model=self.openai_model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.2,
+                max_tokens=2000,
+            )
+            return response.choices[0].message.content.strip()
+
+        raise ValueError(f"Unknown provider: {self.llm_provider}")
+
+    # ── Batch LLM call ─────────────────────────────────────────────────────────
+
+    def _batch_analyze(self, snapshots: List[MarketDataSnapshot]) -> List[AIAnalysisReport]:
+        """Send all stocks in one prompt and parse structured JSON response."""
+        stocks_summary = ""
+        for i, snapshot in enumerate(snapshots, 1):
+            stock = snapshot.stock_data
+            stocks_summary += f"\n--- Stock {i}: {stock.symbol} ({stock.company_name}) ---\n"
+            stocks_summary += (
+                f"Price: Rs{stock.price:,.2f}  Change: {stock.change_percent:+.2f}%\n"
+                f"Open: Rs{stock.open_price:,.2f}  High: Rs{stock.high:,.2f}  Low: Rs{stock.low:,.2f}\n"
+                f"Volume: {stock.volume:,}\n"
+            )
+            if snapshot.bulk_block_deals:
+                stocks_summary += f"Bulk/Block deals: {len(snapshot.bulk_block_deals)} deal(s)\n"
+            if snapshot.institutional_activity:
+                for a in snapshot.institutional_activity:
+                    stocks_summary += f"{a.institution_type}: Net Rs{a.net_value:+,.0f}Cr\n"
+
+        system_msg = (
+            "You are an expert financial analyst specialising in Indian stock markets. "
+            "Return ONLY a valid JSON array (no markdown fences) where each element has keys: "
+            "symbol (string), sentiment (Bullish/Bearish/Neutral), "
+            "highlights (list of 3 strings), concerns (list of 1-2 strings), "
+            "analysis (2-3 sentence plain-text summary)."
+        )
+        user_msg = (
+            f"Analyse the following {len(snapshots)} Indian stocks and return structured JSON:\n"
+            f"{stocks_summary}"
+        )
+
+        raw = self._call_llm(system_msg, user_msg)
+        parsed = self._extract_json(raw)   # Raises on bad JSON – caught by caller
+
+        results: List[AIAnalysisReport] = []
+        for snapshot in snapshots:
+            stock = snapshot.stock_data
+            item = next((p for p in parsed if p.get("symbol") == stock.symbol), {})
+            sentiment = item.get("sentiment", "Neutral")
+            highlights = item.get("highlights", [])
+            concerns = item.get("concerns", [])
+            analysis_text = item.get("analysis", raw)
+
+            daily = DailyTradingAnalysis(
+                symbol=stock.symbol,
+                date=stock.timestamp,
+                price_movement=f"{stock.change_percent:+.2f}% move",
+                volume_analysis=f"{stock.volume:,} shares traded",
+                buyer_seller_balance=sentiment,
+                key_observations=highlights,
+            )
+            report = AIAnalysisReport(
+                symbol=stock.symbol,
+                company_name=stock.company_name,
+                timestamp=datetime.now(),
+                daily_trading=daily,
+                overall_sentiment=sentiment,
+                key_highlights=highlights,
+                concerns=concerns,
+                raw_llm_response=analysis_text,
+            )
+            self._print_analysis_summary(report)
+            results.append(report)
+
+        return results
     
     def _analyze_snapshot(self, snapshot: MarketDataSnapshot) -> Optional[AIAnalysisReport]:
         """
-        Analyze a single stock snapshot using GPT
-        
-        Args:
-            snapshot: MarketDataSnapshot object
-            
-        Returns:
-            AIAnalysisReport or None
+        Analyse a single stock snapshot (used as fallback when batch JSON parse fails).
         """
-        if not self.client:
-            self.logger.error("OpenAI client not initialized")
-            return None
-        
-        # Build prompt for GPT
         prompt = self._build_analysis_prompt(snapshot)
-        
+        system_msg = (
+            "You are an expert financial analyst specialising in Indian stock markets. "
+            "Analyse market data and provide clear, actionable insights."
+        )
         try:
-            # Call GPT API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert financial analyst specializing in Indian stock markets. Analyze market data and provide clear, actionable insights."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.3,  # Lower temperature for more focused analysis
-                max_tokens=1500
-            )
-            
-            llm_response = response.choices[0].message.content
-            
-            # Parse LLM response into structured analysis
-            analysis = self._parse_llm_response(snapshot, llm_response)
-            
-            return analysis
-            
-        except Exception as e:
-            self.logger.error(f"Error calling GPT API: {e}")
+            llm_response = self._call_llm(system_msg, prompt)
+            return self._parse_llm_response(snapshot, llm_response)
+        except Exception as exc:
+            self.logger.error(f"Error calling {self.llm_provider} API: {exc}")
             return None
     
     def _build_analysis_prompt(self, snapshot: MarketDataSnapshot) -> str:

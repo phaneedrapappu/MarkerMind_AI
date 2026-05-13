@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – MarketMind AI{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+  <!-- KPI Cards -->
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-primary">{{ summary.total_stocks_tracked }}</div>
+        <div class="text-muted small">Stocks Tracked</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-success">{{ summary.total_signals }}</div>
+        <div class="text-muted small">Signals Generated</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-info">{{ summary.total_news }}</div>
+        <div class="text-muted small">News Articles</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-warning">{{ summary.total_alerts_sent }}</div>
+        <div class="text-muted small">Emails Sent</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <!-- Latest Signals -->
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-graph-up-arrow text-success"></i> Latest Trading Signals
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-hover table-sm mb-0">
+          <thead class="table-dark">
+            <tr>
+              <th>Symbol</th>
+              <th>Signal</th>
+              <th>Confidence</th>
+              <th>Risk</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in signals %}
+            <tr onclick="window.location='/stock/{{ s.symbol }}'" style="cursor:pointer">
+              <td><strong>{{ s.symbol }}</strong></td>
+              <td>
+                {% if s.signal_type == 'BUY' %}
+                  <span class="badge bg-success">📈 BUY</span>
+                {% elif s.signal_type == 'SELL' %}
+                  <span class="badge bg-danger">📉 SELL</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark">⏸ HOLD</span>
+                {% endif %}
+              </td>
+              <td>{{ "%.0f"|format(s.confidence * 100) }}%</td>
+              <td>{{ s.risk_level }}</td>
+              <td class="text-muted small">{{ s.signal_date[:10] if s.signal_date else '-' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-center text-muted py-3">No signals yet – run the pipeline first.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Latest News -->
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-newspaper text-info"></i> Latest News
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for n in news %}
+        <li class="list-group-item px-3 py-2">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <a href="{{ n.url }}" target="_blank" class="text-decoration-none text-dark fw-semibold small">
+                {{ n.title[:90] }}{% if n.title|length > 90 %}…{% endif %}
+              </a>
+              <div class="text-muted" style="font-size:11px">{{ n.source }} · {{ n.published_at[:10] if n.published_at else '' }}</div>
+            </div>
+            {% if n.sentiment == 'POSITIVE' %}
+              <span class="badge bg-success-subtle text-success ms-2">+</span>
+            {% elif n.sentiment == 'NEGATIVE' %}
+              <span class="badge bg-danger-subtle text-danger ms-2">−</span>
+            {% else %}
+              <span class="badge bg-secondary-subtle text-secondary ms-2">~</span>
+            {% endif %}
+          </div>
+        </li>
+        {% else %}
+        <li class="list-group-item text-center text-muted py-3">No news yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row: Signal distribution -->
+<div class="row g-3 mt-1">
+  <div class="col-md-5">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Signal Distribution (all time)</div>
+      <div class="card-body">
+        <canvas id="signalDistChart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Recent Alerts</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-secondary">
+            <tr><th>Time</th><th>Symbol</th><th>Status</th><th>Subject</th></tr>
+          </thead>
+          <tbody>
+            {% for a in alerts %}
+            <tr>
+              <td class="small text-muted">{{ a.created_at[:16] if a.created_at else '-' }}</td>
+              <td>{{ a.symbol }}</td>
+              <td>{% if a.success %}<span class="badge bg-success">Sent</span>{% else %}<span class="badge bg-danger">Failed</span>{% endif %}</td>
+              <td class="small">{{ a.subject[:50] if a.subject else '-' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-3">No alerts yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Fetch signal distribution from API and draw pie chart
+fetch('/api/signals?limit=200')
+  .then(r => r.json())
+  .then(data => {
+    const counts = {BUY: 0, SELL: 0, HOLD: 0};
+    data.forEach(s => { if (counts[s.signal_type] !== undefined) counts[s.signal_type]++; });
+    const ctx = document.getElementById('signalDistChart');
+    new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: ['BUY', 'SELL', 'HOLD'],
+        datasets: [{
+          data: [counts.BUY, counts.SELL, counts.HOLD],
+          backgroundColor: ['#198754', '#dc3545', '#ffc107'],
+        }]
+      },
+      options: { plugins: { legend: { position: 'bottom' } }, cutout: '60%' }
+    });
+  });
+</script>
+{% endblock %}
