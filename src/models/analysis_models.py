@@ -189,6 +189,29 @@ class TradingSignal:
             'time_horizon': self.time_horizon
         }
     
+    @property
+    def signal_type(self) -> str:
+        """Return a simplified BUY / SELL / HOLD string (used by email & report agents)."""
+        mapping = {
+            SignalType.STRONG_BUY: "BUY",
+            SignalType.BUY: "BUY",
+            SignalType.HOLD: "HOLD",
+            SignalType.REDUCE_EXPOSURE: "SELL",
+            SignalType.SELL: "SELL",
+            SignalType.STRONG_SELL: "SELL",
+        }
+        return mapping.get(self.signal, "HOLD")
+
+    @property
+    def confidence_ratio(self) -> float:
+        """Confidence as a 0-1 ratio (confidence field is 0-100)."""
+        return min(self.confidence / 100.0, 1.0)
+
+    @property
+    def risk_level_str(self) -> str:
+        """Risk level as plain string."""
+        return self.risk_level.value if isinstance(self.risk_level, RiskLevel) else str(self.risk_level)
+
     def get_signal_emoji(self) -> str:
         """Get emoji for signal type"""
         emoji_map = {

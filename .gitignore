@@ -67,3 +67,8 @@ Thumbs.db
 # API Keys (never commit these!)
 *api_key*
 *API_KEY*
+
+# MarketMind AI generated files
+data/marketmind.db
+data/reports/
+logs/

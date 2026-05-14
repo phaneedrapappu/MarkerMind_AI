@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}{{ symbol }} – MarketMind AI{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3 gap-3">
+  <a href="/" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Back</a>
+  <h4 class="mb-0">{{ symbol }}</h4>
+  {% if signals %}
+    {% set latest = signals[0] %}
+    {% if latest.signal_type == 'BUY' %}
+      <span class="badge bg-success fs-6">📈 {{ latest.signal_type }}</span>
+    {% elif latest.signal_type == 'SELL' %}
+      <span class="badge bg-danger fs-6">📉 {{ latest.signal_type }}</span>
+    {% else %}
+      <span class="badge bg-warning text-dark fs-6">⏸ {{ latest.signal_type }}</span>
+    {% endif %}
+    <span class="text-muted small">Confidence {{ "%.0f"|format(latest.confidence * 100) }}% | Risk {{ latest.risk_level }}</span>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <!-- Price chart (Chart.js using DB history) -->
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold"><i class="bi bi-graph-up"></i> Price History</div>
+      <div class="card-body">
+        <canvas id="priceChart" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Signal history cards -->
+  <div class="col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Signal History</div>
+      <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
+        <ul class="list-group list-group-flush">
+          {% for s in signals %}
+          <li class="list-group-item d-flex justify-content-between align-items-center px-3 py-2">
+            <div>
+              {% if s.signal_type == 'BUY' %}
+                <span class="badge bg-success">BUY</span>
+              {% elif s.signal_type == 'SELL' %}
+                <span class="badge bg-danger">SELL</span>
+              {% else %}
+                <span class="badge bg-warning text-dark">HOLD</span>
+              {% endif %}
+              <span class="small ms-1">{{ "%.0f"|format(s.confidence * 100) }}%</span>
+            </div>
+            <span class="text-muted small">{{ s.signal_date[:10] if s.signal_date else '-' }}</span>
+          </li>
+          {% else %}
+          <li class="list-group-item text-center text-muted py-3">No signals.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Generated chart images -->
+{% if chart_names %}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold"><i class="bi bi-image"></i> Generated Report Charts</div>
+      <div class="card-body">
+        <div class="row g-3">
+          {% for name in chart_names %}
+          <div class="col-md-6">
+            <img src="/charts/{{ name }}" class="img-fluid rounded shadow-sm" alt="{{ name }}">
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Latest Analysis -->
+{% if analysis %}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold"><i class="bi bi-robot"></i> AI Analysis</div>
+      <div class="card-body" style="max-height:320px;overflow-y:auto;">
+        {% for a in analysis %}
+        <div class="mb-3 p-3 bg-light rounded">
+          <div class="d-flex justify-content-between mb-1">
+            <span class="fw-semibold">{{ a.analysis_date[:10] if a.analysis_date else '-' }}</span>
+            <span class="badge {% if a.overall_sentiment == 'Bullish' %}bg-success{% elif a.overall_sentiment == 'Bearish' %}bg-danger{% else %}bg-secondary{% endif %}">
+              {{ a.overall_sentiment }}
+            </span>
+          </div>
+          <p class="small mb-0 text-muted">{{ a.raw_llm_response[:400] if a.raw_llm_response else 'N/A' }}{% if a.raw_llm_response and a.raw_llm_response|length > 400 %}…{% endif %}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- News -->
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold"><i class="bi bi-newspaper"></i> News for {{ symbol }}</div>
+      <div style="max-height:360px;overflow-y:auto;">
+      <ul class="list-group list-group-flush">
+        {% for n in news %}
+        <li class="list-group-item px-3 py-2">
+          <div class="d-flex justify-content-between">
+            <a href="{{ n.url }}" target="_blank" class="text-decoration-none text-dark small fw-semibold">{{ n.title[:100] }}{% if n.title|length > 100 %}…{% endif %}</a>
+            {% if n.sentiment == 'POSITIVE' %}
+              <span class="badge bg-success-subtle text-success">+</span>
+            {% elif n.sentiment == 'NEGATIVE' %}
+              <span class="badge bg-danger-subtle text-danger">−</span>
+            {% else %}
+              <span class="badge bg-secondary-subtle text-secondary">~</span>
+            {% endif %}
+          </div>
+          <div class="text-muted" style="font-size:11px">{{ n.source }} · {{ n.published_at[:10] if n.published_at else '' }}</div>
+        </li>
+        {% else %}
+        <li class="list-group-item text-center text-muted py-3">No news for {{ symbol }}.</li>
+        {% endfor %}
+      </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Load price history from API and render line chart
+fetch('/api/stock/{{ symbol }}/history?limit=30')
+  .then(r => r.json())
+  .then(data => {
+    if (!data.length) return;
+    const reversed = data.reverse();
+    const labels = reversed.map(d => d.timestamp ? d.timestamp.slice(0, 10) : '');
+    const prices = reversed.map(d => d.price);
+    const ctx = document.getElementById('priceChart');
+    const trend = prices[prices.length-1] >= prices[0] ? '#198754' : '#dc3545';
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: '{{ symbol }} Price (₹)',
+          data: prices,
+          borderColor: trend,
+          backgroundColor: trend + '22',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+        }]
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { ticks: { callback: v => '₹' + v.toLocaleString('en-IN') } }
+        }
+      }
+    });
+  });
+</script>
+{% endblock %}

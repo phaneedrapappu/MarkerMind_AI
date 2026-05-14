@@ -17,16 +17,11 @@ class SignalGeneratorAgent(BaseAgent):
     from AI analysis reports
     """
     
-    def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize Signal Generator Agent
-        
-        Args:
-            config: Configuration dictionary
-        """
+    def __init__(self, config: Dict[str, Any], db_manager=None):
         super().__init__("SignalGeneratorAgent", config)
-        self.risk_tolerance = config.get('risk_tolerance', 'medium')  # low/medium/high
+        self.risk_tolerance = config.get('risk_tolerance', 'medium')
         self.signals: List[TradingSignal] = []
+        self.db = db_manager
         
     def initialize(self) -> bool:
         """
@@ -67,6 +62,24 @@ class SignalGeneratorAgent(BaseAgent):
                 if signal:
                     self.signals.append(signal)
                     self._print_signal(signal)
+                    # Persist
+                    if self.db:
+                        try:
+                            import json as _json
+                            self.db.save_trading_signal({
+                                "symbol": signal.symbol,
+                                "signal_date": signal.timestamp,
+                                "signal_type": signal.signal_type,
+                                "confidence": signal.confidence_ratio,
+                                "risk_level": signal.risk_level_str,
+                                "target_price": signal.target_price,
+                                "stop_loss": signal.stop_loss,
+                                "supporting_factors": _json.dumps(signal.supporting_factors),
+                                "risk_factors": _json.dumps(signal.risk_factors),
+                                "current_price": signal.entry_price,
+                            })
+                        except Exception as db_exc:
+                            self.logger.warning(f"DB persist failed for signal {signal.symbol}: {db_exc}")
                 else:
                     self.logger.warning(f"No signal generated for {analysis.symbol}")
                     

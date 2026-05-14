@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Alert History – MarketMind AI{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4 gap-3 flex-wrap">
+  <div>
+    <h5 class="mb-0 fw-bold"><i class="bi bi-bell-fill text-accent me-2"></i>Email Alert History</h5>
+    <div class="text-muted" style="font-size:13px">All pipeline email digests sent to recipients</div>
+  </div>
+  <button class="mm-btn-run" onclick="openRunModal()">
+    <i class="bi bi-play-fill"></i> New Run
+  </button>
+</div>
+
+{% if alerts %}
+<div class="mm-card">
+  <div class="mm-card-body p0" style="max-height:600px;overflow-y:auto;">
+    <div class="mm-table-wrap">
+    <table class="mm-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Symbol</th>
+          <th>Recipients</th>
+          <th>Status</th>
+          <th>Subject</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr>
+          <td style="white-space:nowrap;font-size:12px;color:var(--text-muted)">{{ a.sent_at[:16] if a.sent_at else (a.created_at[:16] if a.created_at else '-') }}</td>
+          <td><strong>{{ a.symbol or 'Market Digest' }}</strong></td>
+          <td style="font-size:11px">
+            {% if a.recipients %}
+              {% for r in a.recipients.split(',') %}
+                <span style="display:inline-block;background:var(--accent-glow);color:var(--accent);border-radius:99px;padding:1px 8px;margin:1px">{{ r.strip() }}</span>
+              {% endfor %}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if a.success %}<span class="status-sent">✓ Sent</span>
+            {% else %}<span class="status-fail">✗ Failed</span>{% endif %}
+          </td>
+          <td style="font-size:12px;color:var(--text-dim)">
+            {{ a.subject[:60] if a.subject else '-' }}{% if a.subject and a.subject|length > 60 %}…{% endif %}
+            {% if not a.success and a.error_message %}
+              <div style="color:var(--red);font-size:11px;margin-top:2px">{{ a.error_message[:80] }}</div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="mm-card">
+  <div class="empty-state" style="padding:60px 20px">
+    <i class="bi bi-envelope"></i>
+    No alerts have been sent yet.<br>
+    <button class="mm-btn-primary mt-4" onclick="openRunModal()">
+      <i class="bi bi-play-fill me-1"></i>Run Analysis &amp; Send Email
+    </button>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
