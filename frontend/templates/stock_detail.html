@@ -31,9 +31,9 @@
 
   <!-- Signal history cards -->
   <div class="col-lg-4">
-    <div class="card shadow-sm h-100">
+    <div class="card shadow-sm">
       <div class="card-header fw-semibold">Signal History</div>
-      <div class="card-body p-0">
+      <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
         <ul class="list-group list-group-flush">
           {% for s in signals %}
           <li class="list-group-item d-flex justify-content-between align-items-center px-3 py-2">
@@ -84,7 +84,7 @@
   <div class="col-12">
     <div class="card shadow-sm">
       <div class="card-header fw-semibold"><i class="bi bi-robot"></i> AI Analysis</div>
-      <div class="card-body">
+      <div class="card-body" style="max-height:320px;overflow-y:auto;">
         {% for a in analysis %}
         <div class="mb-3 p-3 bg-light rounded">
           <div class="d-flex justify-content-between mb-1">
@@ -107,6 +107,7 @@
   <div class="col-12">
     <div class="card shadow-sm">
       <div class="card-header fw-semibold"><i class="bi bi-newspaper"></i> News for {{ symbol }}</div>
+      <div style="max-height:360px;overflow-y:auto;">
       <ul class="list-group list-group-flush">
         {% for n in news %}
         <li class="list-group-item px-3 py-2">
@@ -126,6 +127,7 @@
         <li class="list-group-item text-center text-muted py-3">No news for {{ symbol }}.</li>
         {% endfor %}
       </ul>
+      </div>
     </div>
   </div>
 </div>

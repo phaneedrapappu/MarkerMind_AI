@@ -24,6 +24,24 @@ GOOGLE_NEWS_RSS = (
 ET_MARKETS_RSS = "https://economictimes.indiatimes.com/markets/rss.cms"
 MONEYCONTROL_RSS = "https://www.moneycontrol.com/rssfeeds/marketsnews.xml"
 
+# ── Global / World market RSS feeds ───────────────────────────────────────────
+GLOBAL_FEEDS = [
+    # Reuters Business / Finance
+    ("https://feeds.reuters.com/reuters/businessNews", "Reuters Business"),
+    ("https://feeds.reuters.com/reuters/technologyNews", "Reuters Tech"),
+    # Yahoo Finance world markets
+    ("https://finance.yahoo.com/news/rssindex", "Yahoo Finance"),
+    # Google News – global markets query
+    ("https://news.google.com/rss/search?q=global+stock+market+wall+street&hl=en&gl=US&ceid=US:en", "Google News Global"),
+    # Seeking Alpha / Investing.com news feed
+    ("https://www.investing.com/rss/news.rss", "Investing.com"),
+    # Livemint – Indian market with global context
+    ("https://www.livemint.com/rss/markets", "Livemint Markets"),
+]
+
+# Special symbol used to tag global/world news in the database
+GLOBAL_SYMBOL = "__GLOBAL__"
+
 SENTIMENT_KEYWORDS = {
     "POSITIVE": [
         "rally", "surge", "gain", "bull", "profit", "growth", "strong", "beat",
@@ -75,7 +93,7 @@ class NewsAgent(BaseAgent):
 
     def execute(self) -> List[Dict[str, Any]]:
         """
-        Fetch news for all tracked stocks + general market news.
+        Fetch news for all tracked stocks + Indian market + global markets.
 
         Returns:
             List of news dicts (also saved to DB).
@@ -83,10 +101,15 @@ class NewsAgent(BaseAgent):
         self.log_execution()
         all_news: List[Dict[str, Any]] = []
 
-        # General market news
-        logger.info("Fetching general market news …")
+        # Indian market general news (no symbol tag)
+        logger.info("Fetching Indian market news …")
         all_news.extend(self._fetch_feed(ET_MARKETS_RSS, symbol=None))
         all_news.extend(self._fetch_feed(MONEYCONTROL_RSS, symbol=None))
+
+        # Global / world market news (tagged with GLOBAL_SYMBOL)
+        logger.info("Fetching global market news …")
+        for feed_url, _source_hint in GLOBAL_FEEDS:
+            all_news.extend(self._fetch_feed(feed_url, symbol=GLOBAL_SYMBOL))
 
         # Stock-specific news
         for symbol in self.stocks:

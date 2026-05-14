@@ -1,0 +1,17 @@
+[Unit]
+Description=MarketMind AI Web Application
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/rajasekharreddysuggu/code/MarkerMind_AI
+EnvironmentFile=/home/rajasekharreddysuggu/code/MarkerMind_AI/.env
+ExecStart=/usr/bin/python3 /home/rajasekharreddysuggu/code/MarkerMind_AI/app.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

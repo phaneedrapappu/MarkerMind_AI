@@ -13,7 +13,8 @@
 
 {% if alerts %}
 <div class="mm-card">
-  <div class="mm-card-body p0">
+  <div class="mm-card-body p0" style="max-height:600px;overflow-y:auto;">
+    <div class="mm-table-wrap">
     <table class="mm-table">
       <thead>
         <tr>
@@ -50,6 +51,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% else %}

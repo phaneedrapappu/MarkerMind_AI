@@ -29,6 +29,9 @@
       <a href="/alerts" class="mm-nav-link {% if request.path == '/alerts' %}active{% endif %}">
         <i class="bi bi-bell"></i> Alerts
       </a>
+      <a href="/subscribe" class="mm-nav-link {% if request.path == '/subscribe' %}active{% endif %}">
+        <i class="bi bi-envelope-heart"></i> Subscribe
+      </a>
     </div>
     <div class="d-flex align-items-center gap-2">
       <span id="pipeline-badge" class="mm-badge badge-idle">
@@ -61,6 +64,10 @@
   <a href="/alerts" class="mm-bottom-item {% if request.path == '/alerts' %}active{% endif %}">
     <i class="bi bi-bell"></i>
     <span>Alerts</span>
+  </a>
+  <a href="/subscribe" class="mm-bottom-item {% if request.path == '/subscribe' %}active{% endif %}">
+    <i class="bi bi-envelope-heart"></i>
+    <span>Subscribe</span>
   </a>
   <button class="mm-bottom-item mm-bottom-run" onclick="openRunModal()">
     <div class="mm-bottom-run-btn"><i class="bi bi-play-fill"></i></div>

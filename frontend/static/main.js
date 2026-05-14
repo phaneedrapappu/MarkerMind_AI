@@ -55,13 +55,33 @@ function openRunModal() {
 async function loadStockCatalog() {
   if (Object.keys(_catalog).length) { renderStockGrid(); return; }
   try {
-    const res = await fetch('/api/stocks');
-    _catalog = await res.json();
-    buildSectorTabs();
-    renderStockGrid();
-  } catch(e) {
-    document.getElementById('stockGrid').innerHTML = '<div class="text-muted small text-center py-3">Failed to load stocks.</div>';
+    // Try the live NSE equity list first (may include 1000+ stocks)
+    const res = await fetch('/api/stocks/live');
+    const data = await res.json();
+    const rawCatalog = data.catalog || data;
+    // Normalize: each sector value may be [{symbol,name},...] or [sym,...]
+    _catalog = {};
+    for (const [sector, items] of Object.entries(rawCatalog)) {
+      if (!Array.isArray(items)) continue;
+      _catalog[sector] = items.map(i => (typeof i === 'object' ? i.symbol : i));
+    }
+    if (data.source === 'live') {
+      // Show a small badge in the modal header
+      const hdr = document.querySelector('#runModal .mm-section-header .text-muted.small');
+      if (hdr) hdr.innerHTML = 'Pick the NSE stocks to analyse &nbsp;<span class="mm-live-badge"><span class="mm-live-dot"></span>Live NSE list</span>';
+    }
+  } catch {
+    // Fallback to hardcoded catalog
+    try {
+      const res = await fetch('/api/stocks');
+      _catalog = await res.json();
+    } catch(e) {
+      document.getElementById('stockGrid').innerHTML = '<div class="text-muted small text-center py-3">Failed to load stocks.</div>';
+      return;
+    }
   }
+  buildSectorTabs();
+  renderStockGrid();
 }
 
 function buildSectorTabs() {

@@ -65,6 +65,14 @@ class AgentOrchestrator:
             smtp = email_cfg.setdefault("smtp", {})
             smtp["recipients"] = overrides["recipients"]
 
+        if "unsubscribe_url" in overrides:
+            email_cfg = agent_cfgs.setdefault("email_alert_agent", {})
+            email_cfg["unsubscribe_url"] = overrides["unsubscribe_url"]
+
+        if "app_url" in overrides:
+            email_cfg = agent_cfgs.setdefault("email_alert_agent", {})
+            email_cfg["app_url"] = overrides["app_url"]
+
     def _setup_logging(self):
         log_cfg = self.config.get("logging", {})
         log_level = getattr(logging, log_cfg.get("level", "INFO"))

@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% block title %}Subscribe – MarketMind AI{% endblock %}
+
+{% block content %}
+
+{% if unsubscribed %}
+<!-- Unsubscribed confirmation -->
+<div class="mm-subscribe-hero">
+  <div class="mm-subscribe-card text-center">
+    <div style="font-size:52px;margin-bottom:12px">👋</div>
+    <h3 class="mb-2">Unsubscribed</h3>
+    <p class="text-muted mb-4">You've been removed from the MarketMind AI mailing list. You won't receive any more alerts.</p>
+    <a href="/subscribe" class="mm-btn-primary" style="text-decoration:none">Re-subscribe</a>
+    <a href="/" class="mm-btn-secondary ms-2" style="text-decoration:none">Back to Dashboard</a>
+  </div>
+</div>
+
+{% elif unsubscribe_error %}
+<div class="mm-subscribe-hero">
+  <div class="mm-subscribe-card text-center">
+    <div style="font-size:52px;margin-bottom:12px">⚠️</div>
+    <h3 class="mb-2">Unsubscribe Failed</h3>
+    <p class="text-muted mb-4">{{ unsubscribe_error }}</p>
+    <a href="/" class="mm-btn-secondary" style="text-decoration:none">Back to Dashboard</a>
+  </div>
+</div>
+
+{% else %}
+<!-- Subscription form -->
+<div class="mm-subscribe-hero">
+  <!-- Hero -->
+  <div class="mb-4">
+    <div style="font-size:56px;margin-bottom:10px">📬</div>
+    <h2 class="fw-bold mb-2">Daily Market Intelligence</h2>
+    <p class="text-muted">Get AI-generated trading signals + news digest for your chosen stocks,<br>
+       sent to your inbox <strong>2× per day</strong> — before market opens &amp; after it closes.<br>
+       <span class="text-muted" style="font-size:13px">
+         <i class="bi bi-arrow-repeat me-1"></i>Already subscribed? Re-submit with a new stock list to update your watchlist.
+       </span></p>
+    <div class="d-flex justify-content-center gap-3 flex-wrap mt-3">
+      <span class="mm-live-badge"><span class="mm-live-dot"></span>Pre-market 8:45 AM IST</span>
+      <span class="mm-live-badge"><span class="mm-live-dot"></span>Post-market 4:15 PM IST</span>
+      <span class="mm-live-badge"><span class="mm-live-dot"></span>Free forever</span>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="mm-subscribe-card mb-4">
+    <h6 class="text-muted text-uppercase fw-bold small mb-3" style="letter-spacing:.08em">How it works</h6>
+    <div class="mm-sub-steps">
+      <div class="mm-sub-step">
+        <div class="mm-sub-step-icon">📋</div>
+        <div class="fw-semibold" style="font-size:13px">Pick Stocks</div>
+        <div class="mm-sub-step-label">Choose any NSE stocks you want to track</div>
+      </div>
+      <div class="mm-sub-step">
+        <div class="mm-sub-step-icon">📧</div>
+        <div class="fw-semibold" style="font-size:13px">Enter Email</div>
+        <div class="mm-sub-step-label">Add your email address to receive alerts</div>
+      </div>
+      <div class="mm-sub-step">
+        <div class="mm-sub-step-icon">🤖</div>
+        <div class="fw-semibold" style="font-size:13px">AI Digest</div>
+        <div class="mm-sub-step-label">Gemini analyses each stock and generates BUY/HOLD/SELL signals</div>
+      </div>
+      <div class="mm-sub-step">
+        <div class="mm-sub-step-icon">📊</div>
+        <div class="fw-semibold" style="font-size:13px">2× Daily</div>
+        <div class="mm-sub-step-label">Rich HTML report lands in your inbox automatically</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subscription form card -->
+  <div class="mm-subscribe-card">
+    <h5 class="fw-bold mb-1"><i class="bi bi-envelope-heart text-accent me-2"></i>Subscribe Now</h5>
+    <p class="text-muted small mb-4">No spam. Unsubscribe anytime with one click.</p>
+
+    <!-- Alert area -->
+    <div id="subAlert" style="display:none" class="mb-3"></div>
+
+    <!-- Step 1: Email -->
+    <div class="mb-4">
+      <label class="form-label fw-semibold" style="font-size:14px">
+        <i class="bi bi-envelope me-1"></i>Your Email Address
+      </label>
+      <input type="email" id="subEmail" class="form-control mm-input"
+             placeholder="you@example.com" autocomplete="email">
+    </div>
+
+    <!-- Step 2: Stock Picker -->
+    <div class="mb-4">
+      <label class="form-label fw-semibold" style="font-size:14px">
+        <i class="bi bi-graph-up me-1"></i>Stocks to Track
+        <span class="ms-2 mm-selected-count" id="subSelCount">0 selected</span>
+        <span id="subLiveBadge" class="mm-live-badge ms-2" style="display:none">
+          <span class="mm-live-dot"></span>Live NSE list
+        </span>
+      </label>
+
+      <!-- Search -->
+      <div class="position-relative mb-2">
+        <i class="bi bi-search mm-search-icon"></i>
+        <input type="text" id="subSearch" class="form-control mm-search-input"
+               placeholder="Search any NSE stock…" oninput="subFilterStocks(this.value)">
+      </div>
+
+      <!-- Sector tabs -->
+      <div class="mm-sector-tabs mb-2" id="subSectorTabs">
+        <button class="mm-sector-tab active" onclick="subFilterSector('all', this)">All</button>
+      </div>
+
+      <!-- Stock chips -->
+      <div class="mm-stock-grid" id="subStockGrid">
+        <div class="text-muted small text-center py-4">
+          <span class="spinner-border spinner-border-sm me-2"></span>Loading stocks…
+        </div>
+      </div>
+
+      <!-- Presets -->
+      <div class="mm-presets mt-2">
+        <span class="text-muted small me-2">Quick:</span>
+        <button class="mm-preset-btn" onclick="subSelectPreset(['TCS','INFY','WIPRO','HCLTECH'])">IT Top 4</button>
+        <button class="mm-preset-btn" onclick="subSelectPreset(['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK'])">Banking</button>
+        <button class="mm-preset-btn" onclick="subSelectPreset(['RELIANCE','ONGC','NTPC','TATAPOWER'])">Energy</button>
+        <button class="mm-preset-btn" onclick="subSelectPreset(['TCS','INFY','HDFCBANK','RELIANCE','DMART'])">Nifty Mix</button>
+      </div>
+    </div>
+
+    <!-- Subscribe button -->
+    <button class="mm-btn-primary w-100" id="subBtn" onclick="doSubscribe()" disabled style="font-size:15px;padding:12px">
+      <i class="bi bi-envelope-check me-2"></i>Subscribe / Update Watchlist
+    </button>
+    <p class="text-muted text-center mt-3" style="font-size:12px">
+      <i class="bi bi-shield-check me-1"></i>
+      Your email is used only to deliver alerts. We never share it.
+    </p>
+  </div>
+
+  <!-- Manage Subscription card -->
+  <div class="mm-subscribe-card mt-3">
+    <h6 class="fw-bold mb-1" style="font-size:14px">
+      <i class="bi bi-gear text-accent me-2"></i>Already subscribed? Manage your subscription
+    </h6>
+    <p class="text-muted small mb-3">Enter your email and we'll send your unsubscribe link — even if you've lost it.</p>
+
+    <div id="lookupAlert" style="display:none" class="mb-3"></div>
+
+    <div class="d-flex gap-2">
+      <input type="email" id="lookupEmail" class="form-control mm-input"
+             placeholder="your@email.com" style="font-size:14px">
+      <button class="mm-btn-outline-sm" id="lookupBtn" onclick="doLookup()" style="white-space:nowrap;padding:6px 14px">
+        <i class="bi bi-send me-1"></i>Send Link
+      </button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Subscribe page stock picker (mirrors run modal but uses sub* globals) ──
+
+let subAllStocks = {};
+let subSectorMap = {};
+let subActiveSector = 'all';
+let subSelectedStocks = new Set();
+let subCurrentStocks = {};  // filtered view
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadSubStocks();
+  // Enable subscribe button when both email and stocks are filled
+  document.getElementById('subEmail').addEventListener('input', updateSubBtn);
+});
+
+async function loadSubStocks() {
+  // Try dynamic live NSE list first, fall back to hardcoded catalog
+  try {
+    const res = await fetch('/api/stocks/live');
+    const data = await res.json();
+    const catalog = data.catalog || data;
+    // catalog is {sector: [{symbol, name},...]}
+    subSectorMap = {};
+    subAllStocks = {};
+    for (const [sector, items] of Object.entries(catalog)) {
+      if (!Array.isArray(items)) continue;
+      subSectorMap[sector] = [];
+      for (const item of items) {
+        const sym = item.symbol || item;
+        const name = item.name || sym;
+        subAllStocks[sym] = name;
+        subSectorMap[sector].push(sym);
+      }
+    }
+    if (data.source === 'live') {
+      document.getElementById('subLiveBadge').style.display = 'inline-flex';
+    }
+  } catch {
+    // fallback to hardcoded catalog
+    try {
+      const res2 = await fetch('/api/stocks');
+      const cat = await res2.json();
+      subSectorMap = {};
+      subAllStocks = {};
+      for (const [sector, tickers] of Object.entries(cat)) {
+        subSectorMap[sector] = tickers;
+        tickers.forEach(t => subAllStocks[t] = t);
+      }
+    } catch {}
+  }
+
+  subCurrentStocks = {...subAllStocks};
+  buildSubSectorTabs();
+  renderSubGrid(subCurrentStocks);
+}
+
+function buildSubSectorTabs() {
+  const container = document.getElementById('subSectorTabs');
+  container.innerHTML = '<button class="mm-sector-tab active" onclick="subFilterSector(\'all\', this)">All</button>';
+  for (const sector of Object.keys(subSectorMap)) {
+    const btn = document.createElement('button');
+    btn.className = 'mm-sector-tab';
+    btn.textContent = sector;
+    btn.onclick = function(){ subFilterSector(sector, this); };
+    container.appendChild(btn);
+  }
+}
+
+function subFilterSector(sector, btn) {
+  subActiveSector = sector;
+  document.querySelectorAll('#subSectorTabs .mm-sector-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (sector === 'all') {
+    subCurrentStocks = {...subAllStocks};
+  } else {
+    const tickers = subSectorMap[sector] || [];
+    subCurrentStocks = Object.fromEntries(tickers.map(t => [t, subAllStocks[t] || t]));
+  }
+  const search = document.getElementById('subSearch').value;
+  subFilterStocks(search);
+}
+
+function subFilterStocks(kw) {
+  const q = (kw || '').toUpperCase();
+  const filtered = q
+    ? Object.fromEntries(Object.entries(subCurrentStocks).filter(([sym, name]) =>
+        sym.includes(q) || name.toUpperCase().includes(q)))
+    : subCurrentStocks;
+  renderSubGrid(filtered);
+}
+
+function renderSubGrid(stocks) {
+  const grid = document.getElementById('subStockGrid');
+  const entries = Object.entries(stocks);
+  if (!entries.length) {
+    grid.innerHTML = '<div class="text-muted small text-center py-3">No stocks found</div>';
+    return;
+  }
+  grid.innerHTML = entries.map(([sym, name]) => `
+    <button class="mm-chip ${subSelectedStocks.has(sym) ? 'selected' : ''}"
+            onclick="subToggleStock('${sym}')" title="${name}">
+      ${sym}
+    </button>
+  `).join('');
+}
+
+function subToggleStock(sym) {
+  if (subSelectedStocks.has(sym)) subSelectedStocks.delete(sym);
+  else subSelectedStocks.add(sym);
+  renderSubGrid(subCurrentStocks);
+  document.getElementById('subSelCount').textContent = `${subSelectedStocks.size} selected`;
+  updateSubBtn();
+}
+
+function subSelectPreset(tickers) {
+  subSelectedStocks = new Set(tickers);
+  renderSubGrid(subCurrentStocks);
+  document.getElementById('subSelCount').textContent = `${subSelectedStocks.size} selected`;
+  updateSubBtn();
+}
+
+function updateSubBtn() {
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(document.getElementById('subEmail').value);
+  const stocksOk = subSelectedStocks.size > 0;
+  document.getElementById('subBtn').disabled = !(emailOk && stocksOk);
+}
+
+async function doSubscribe() {
+  const email = document.getElementById('subEmail').value.trim();
+  const stocks = [...subSelectedStocks];
+  const btn = document.getElementById('subBtn');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Subscribing…';
+
+  try {
+    const res = await fetch('/api/subscribe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, stocks}),
+    });
+    const data = await res.json();
+    if (data.status === 'subscribed' || data.status === 'updated') {
+      const isUpdate = data.status === 'updated';
+      const alert = document.getElementById('subAlert');
+      alert.className = 'alert alert-success';
+      alert.style.display = '';
+      alert.innerHTML = isUpdate
+        ? `<strong>✅ Watchlist updated!</strong> Your alerts for <strong>${email}</strong>
+           will now track: <strong>${stocks.join(', ')}</strong>.<br>
+           <small>A confirmation email has been sent — changes take effect at the next scheduled digest.</small><br>
+           <small class="text-muted mt-1 d-block">
+             <i class="bi bi-info-circle me-1"></i>
+             Your unsubscribe link: <a href="${data.unsubscribe_url}" class="alert-link">Unsubscribe anytime</a>
+           </small>`
+        : `<strong>🎉 Subscribed!</strong> You'll receive alerts for
+           <strong>${stocks.join(', ')}</strong> at <strong>${email}</strong>.<br>
+           <small>A confirmation email is on its way — check your inbox.</small><br>
+           <small class="text-muted mt-1 d-block">
+             <i class="bi bi-info-circle me-1"></i>
+             Save your unsubscribe link: <a href="${data.unsubscribe_url}" class="alert-link">Unsubscribe anytime</a>
+           </small>`;
+      btn.innerHTML = isUpdate
+        ? '<i class="bi bi-check-circle-fill me-2"></i>Watchlist Updated!'
+        : '<i class="bi bi-check-circle-fill me-2"></i>Subscribed!';
+      btn.style.background = 'var(--green)';
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch(err) {
+    const alert = document.getElementById('subAlert');
+    alert.className = 'alert alert-danger';
+    alert.style.display = '';
+    alert.innerHTML = `<strong>Error:</strong> ${err.message}`;
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-envelope-check me-2"></i>Subscribe — Get Free Daily Alerts';
+  }
+}
+async function doLookup() {
+  const email = document.getElementById('lookupEmail').value.trim();
+  const btn = document.getElementById('lookupBtn');
+  const alertEl = document.getElementById('lookupAlert');
+
+  if (!email || !email.includes('@')) {
+    alertEl.className = 'alert alert-warning';
+    alertEl.style.display = '';
+    alertEl.innerHTML = 'Please enter a valid email address.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Sending…';
+
+  try {
+    const res = await fetch('/api/subscription/lookup', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email}),
+    });
+    const data = await res.json();
+    alertEl.className = 'alert alert-success';
+    alertEl.style.display = '';
+    alertEl.innerHTML = `<i class="bi bi-check-circle me-1"></i>
+      If <strong>${email}</strong> is subscribed, an unsubscribe link has been sent to that address.`;
+  } catch {
+    alertEl.className = 'alert alert-danger';
+    alertEl.style.display = '';
+    alertEl.innerHTML = 'Failed to send — please try again.';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-send me-1"></i>Send Link';
+  }
+}
+</script>
+{% endblock %}

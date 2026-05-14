@@ -2,7 +2,9 @@
 Database Manager - SQLite database using SQLAlchemy ORM
 Handles persistence for market data, analysis reports, signals, and news
 """
+import json
 import logging
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -127,6 +129,20 @@ class AlertRecord(Base):
     sent_at = Column(DateTime)
     success = Column(Boolean, default=False)
     error_message = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SubscriberRecord(Base):
+    """Email subscribers who receive 2x/day automated digests."""
+    __tablename__ = "subscribers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(200), nullable=False, unique=True, index=True)
+    stocks = Column(Text)                  # JSON list e.g. '["TCS","INFY"]'
+    is_active = Column(Boolean, default=True)
+    subscribed_at = Column(DateTime, default=datetime.utcnow)
+    last_sent_at = Column(DateTime)
+    unsubscribe_token = Column(String(64), default=lambda: secrets.token_urlsafe(32))
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -353,6 +369,84 @@ class DatabaseManager:
             )
             return [self._to_dict(r) for r in rows]
 
+    # ── Subscribers ─────────────────────────────────────────────────────────
+
+    def save_subscriber(self, email: str, stocks: List[str]) -> Dict[str, Any]:
+        """Upsert subscriber. Returns the record dict plus an 'is_new' boolean."""
+        with self.session() as sess:
+            existing = sess.query(SubscriberRecord).filter_by(email=email).first()
+            if existing:
+                existing.stocks = json.dumps(stocks)
+                existing.is_active = True
+                sess.commit()
+                result = self._to_dict(existing)
+                result["is_new"] = False
+                return result
+            record = SubscriberRecord(
+                email=email,
+                stocks=json.dumps(stocks),
+                is_active=True,
+                unsubscribe_token=secrets.token_urlsafe(32),
+            )
+            sess.add(record)
+            sess.commit()
+            result = self._to_dict(record)
+            result["is_new"] = True
+            return result
+
+    def get_active_subscribers(self) -> List[Dict[str, Any]]:
+        with self.session() as sess:
+            rows = (
+                sess.query(SubscriberRecord)
+                .filter(SubscriberRecord.is_active == True)
+                .order_by(SubscriberRecord.subscribed_at.desc())
+                .all()
+            )
+            result = []
+            for r in rows:
+                d = self._to_dict(r)
+                try:
+                    d["stocks"] = json.loads(d["stocks"] or "[]")
+                except Exception:
+                    d["stocks"] = []
+                result.append(d)
+            return result
+
+    def deactivate_subscriber(self, token: str) -> bool:
+        """Unsubscribe via token. Returns True if found and deactivated."""
+        with self.session() as sess:
+            record = sess.query(SubscriberRecord).filter_by(unsubscribe_token=token).first()
+            if record:
+                record.is_active = False
+                sess.commit()
+                return True
+            return False
+
+    def update_subscriber_sent(self, email: str) -> None:
+        with self.session() as sess:
+            record = sess.query(SubscriberRecord).filter_by(email=email).first()
+            if record:
+                record.last_sent_at = datetime.utcnow()
+                sess.commit()
+
+    def get_subscribers_count(self) -> int:
+        with self.session() as sess:
+            return sess.query(SubscriberRecord).filter(SubscriberRecord.is_active == True).count()
+
+    # ── Global News ──────────────────────────────────────────────────────────
+
+    def get_global_news(self, limit: int = 30) -> List[Dict]:
+        """Return world/global market news (tagged __GLOBAL__ by NewsAgent)."""
+        with self.session() as sess:
+            rows = (
+                sess.query(NewsRecord)
+                .filter(NewsRecord.symbol == "__GLOBAL__")
+                .order_by(NewsRecord.published_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [self._to_dict(r) for r in rows]
+
     # ── Dashboard summary ───────────────────────────────────────────────────
 
     def get_dashboard_summary(self) -> Dict[str, Any]:
@@ -375,6 +469,11 @@ class DatabaseManager:
                 "total_alerts_sent": (
                     sess.query(AlertRecord)
                     .filter(AlertRecord.success == True)
+                    .count()
+                ),
+                "total_subscribers": (
+                    sess.query(SubscriberRecord)
+                    .filter(SubscriberRecord.is_active == True)
                     .count()
                 ),
                 "latest_signals": self.get_latest_signals(5),
