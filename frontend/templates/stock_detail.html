@@ -2,170 +2,391 @@
 {% block title %}{{ symbol }} – MarketMind AI{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center mb-3 gap-3">
-  <a href="/" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Back</a>
-  <h4 class="mb-0">{{ symbol }}</h4>
-  {% if signals %}
-    {% set latest = signals[0] %}
-    {% if latest.signal_type == 'BUY' %}
-      <span class="badge bg-success fs-6">📈 {{ latest.signal_type }}</span>
-    {% elif latest.signal_type == 'SELL' %}
-      <span class="badge bg-danger fs-6">📉 {{ latest.signal_type }}</span>
-    {% else %}
-      <span class="badge bg-warning text-dark fs-6">⏸ {{ latest.signal_type }}</span>
-    {% endif %}
-    <span class="text-muted small">Confidence {{ "%.0f"|format(latest.confidence * 100) }}% | Risk {{ latest.risk_level }}</span>
-  {% endif %}
+
+<!-- ── Back nav ── -->
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="/stocks" class="mm-btn-outline-sm"><i class="bi bi-arrow-left"></i> Market</a>
+  <a href="/" class="mm-btn-outline-sm"><i class="bi bi-speedometer2"></i> Dashboard</a>
+</div>
+
+<!-- ── Live Price Hero ── -->
+<div class="mm-card mm-live-hero mb-3">
+  <div class="mm-live-hero-main">
+    <div class="mm-live-hero-left">
+      <div class="mm-live-sym">{{ symbol }}</div>
+      <div id="liveCompanyName" class="text-muted small mt-1">Loading live data…</div>
+      {% if signals %}
+        {% set latest = signals[0] %}
+        <div class="d-flex align-items-center gap-2 mt-2">
+          {% if latest.signal_type == 'BUY' %}
+            <span class="sig-buy" style="font-size:14px">📈 AI BUY</span>
+          {% elif latest.signal_type == 'SELL' %}
+            <span class="sig-sell" style="font-size:14px">📉 AI SELL</span>
+          {% else %}
+            <span class="sig-hold" style="font-size:14px">⏸ AI HOLD</span>
+          {% endif %}
+          <span class="text-muted small">{{ "%.0f"|format(latest.confidence * 100) }}% confidence · {{ latest.risk_level }}</span>
+        </div>
+      {% endif %}
+    </div>
+    <div class="mm-live-price-block" id="livePriceBlock">
+      <div class="mm-skel mm-skel-price mb-1"></div>
+      <div class="mm-skel mm-skel-change"></div>
+    </div>
+  </div>
+  <!-- Key stats -->
+  <div class="mm-live-stats">
+    <div class="mm-live-stat"><div class="mm-live-stat-label">Open</div><div class="mm-live-stat-val" id="lsOpen">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">High</div><div class="mm-live-stat-val" id="lsHigh">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">Low</div><div class="mm-live-stat-val" id="lsLow">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">Prev Close</div><div class="mm-live-stat-val" id="lsPrev">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">Volume</div><div class="mm-live-stat-val" id="lsVol">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">Mkt Cap</div><div class="mm-live-stat-val" id="lsCap">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">52W High</div><div class="mm-live-stat-val" id="ls52H">—</div></div>
+    <div class="mm-live-stat"><div class="mm-live-stat-label">52W Low</div><div class="mm-live-stat-val" id="ls52L">—</div></div>
+  </div>
+  <!-- 52W range bar -->
+  <div class="mm-range-bar-wrap" id="rangeBarWrap" style="display:none">
+    <div class="d-flex justify-content-between mb-1" style="font-size:11px;color:var(--text-muted)">
+      <span>52W Low: <span id="rangeMin">—</span></span>
+      <span>Current</span>
+      <span>52W High: <span id="rangeMax">—</span></span>
+    </div>
+    <div class="mm-range-track"><div class="mm-range-fill" id="rangeFill" style="width:50%"></div><div class="mm-range-thumb" id="rangeThumb" style="left:50%"></div></div>
+  </div>
+  <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
+    <i class="bi bi-clock me-1"></i><span id="liveUpdateTime">—</span>
+    &nbsp;·&nbsp;
+    <span class="mm-live-badge"><span class="mm-live-dot"></span>Live NSE · auto-refresh 60s</span>
+  </div>
 </div>
 
 <div class="row g-3">
-  <!-- Price chart (Chart.js using DB history) -->
+  <!-- Left column -->
   <div class="col-lg-8">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold"><i class="bi bi-graph-up"></i> Price History</div>
-      <div class="card-body">
-        <canvas id="priceChart" height="100"></canvas>
+    <!-- Intraday chart -->
+    <div class="mm-card mb-3">
+      <div class="mm-card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-activity text-accent me-1"></i>Price Chart</span>
+        <div class="d-flex gap-1" id="chartRangeButtons">
+          <button class="mm-chip-sm active" onclick="switchChartRange('intraday',this)">Today</button>
+          <button class="mm-chip-sm" onclick="switchChartRange('7d',this)">7D</button>
+          <button class="mm-chip-sm" onclick="switchChartRange('1m',this)">1M</button>
+          <button class="mm-chip-sm" onclick="switchChartRange('3m',this)">3M</button>
+        </div>
       </div>
-    </div>
-  </div>
-
-  <!-- Signal history cards -->
-  <div class="col-lg-4">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold">Signal History</div>
-      <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
-        <ul class="list-group list-group-flush">
-          {% for s in signals %}
-          <li class="list-group-item d-flex justify-content-between align-items-center px-3 py-2">
-            <div>
-              {% if s.signal_type == 'BUY' %}
-                <span class="badge bg-success">BUY</span>
-              {% elif s.signal_type == 'SELL' %}
-                <span class="badge bg-danger">SELL</span>
-              {% else %}
-                <span class="badge bg-warning text-dark">HOLD</span>
-              {% endif %}
-              <span class="small ms-1">{{ "%.0f"|format(s.confidence * 100) }}%</span>
-            </div>
-            <span class="text-muted small">{{ s.signal_date[:10] if s.signal_date else '-' }}</span>
-          </li>
-          {% else %}
-          <li class="list-group-item text-center text-muted py-3">No signals.</li>
-          {% endfor %}
-        </ul>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Generated chart images -->
-{% if chart_names %}
-<div class="row g-3 mt-1">
-  <div class="col-12">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold"><i class="bi bi-image"></i> Generated Report Charts</div>
-      <div class="card-body">
-        <div class="row g-3">
-          {% for name in chart_names %}
-          <div class="col-md-6">
-            <img src="/charts/{{ name }}" class="img-fluid rounded shadow-sm" alt="{{ name }}">
+      <div class="mm-card-body">
+        <div style="position:relative;height:240px">
+          <canvas id="intradayChart"></canvas>
+          <div id="chartLoading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--card-bg)">
+            <span class="spinner-border spinner-border-sm me-2 text-accent"></span>
+            <span class="text-muted small">Loading chart…</span>
           </div>
-          {% endfor %}
         </div>
       </div>
     </div>
-  </div>
-</div>
-{% endif %}
 
-<!-- Latest Analysis -->
-{% if analysis %}
-<div class="row g-3 mt-1">
-  <div class="col-12">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold"><i class="bi bi-robot"></i> AI Analysis</div>
-      <div class="card-body" style="max-height:320px;overflow-y:auto;">
+    <!-- Historical price chart from DB -->
+    <div class="mm-card mb-3">
+      <div class="mm-card-header"><i class="bi bi-graph-up me-1"></i>Historical (DB)</div>
+      <div class="mm-card-body"><canvas id="priceChart" height="120"></canvas></div>
+    </div>
+
+    {% if chart_names %}
+    <div class="mm-card mb-3">
+      <div class="mm-card-header"><i class="bi bi-image me-1"></i>Report Charts</div>
+      <div class="mm-card-body">
+        <div class="row g-2">{% for name in chart_names %}
+          <div class="col-md-6"><img src="/charts/{{ name }}" class="img-fluid rounded" style="border:1px solid var(--border)" alt="{{ name }}"></div>
+        {% endfor %}</div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if analysis %}
+    <div class="mm-card mb-3">
+      <div class="mm-card-header"><i class="bi bi-robot text-accent me-1"></i>AI Analysis</div>
+      <div class="p-0" style="max-height:300px;overflow-y:auto">
         {% for a in analysis %}
-        <div class="mb-3 p-3 bg-light rounded">
-          <div class="d-flex justify-content-between mb-1">
-            <span class="fw-semibold">{{ a.analysis_date[:10] if a.analysis_date else '-' }}</span>
-            <span class="badge {% if a.overall_sentiment == 'Bullish' %}bg-success{% elif a.overall_sentiment == 'Bearish' %}bg-danger{% else %}bg-secondary{% endif %}">
-              {{ a.overall_sentiment }}
-            </span>
+        <div class="px-3 py-2" style="border-bottom:1px solid var(--border)">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="text-muted small">{{ a.analysis_date[:16] if a.analysis_date else '—' }}</span>
+            <span class="badge {% if a.overall_sentiment == 'Bullish' %}bg-success{% elif a.overall_sentiment == 'Bearish' %}bg-danger{% else %}bg-secondary{% endif %}">{{ a.overall_sentiment }}</span>
           </div>
-          <p class="small mb-0 text-muted">{{ a.raw_llm_response[:400] if a.raw_llm_response else 'N/A' }}{% if a.raw_llm_response and a.raw_llm_response|length > 400 %}…{% endif %}</p>
+          <p class="small mb-0" style="color:var(--text-primary);line-height:1.5">{{ a.raw_llm_response[:500] if a.raw_llm_response else 'N/A' }}{% if a.raw_llm_response and a.raw_llm_response|length > 500 %}…{% endif %}</p>
         </div>
         {% endfor %}
       </div>
     </div>
-  </div>
-</div>
-{% endif %}
+    {% endif %}
 
-<!-- News -->
-<div class="row g-3 mt-1">
-  <div class="col-12">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold"><i class="bi bi-newspaper"></i> News for {{ symbol }}</div>
-      <div style="max-height:360px;overflow-y:auto;">
-      <ul class="list-group list-group-flush">
+    <!-- News -->
+    <div class="mm-card">
+      <div class="mm-card-header"><i class="bi bi-newspaper me-1"></i>News for {{ symbol }}</div>
+      <div class="p-0" style="max-height:360px;overflow-y:auto">
         {% for n in news %}
-        <li class="list-group-item px-3 py-2">
-          <div class="d-flex justify-content-between">
-            <a href="{{ n.url }}" target="_blank" class="text-decoration-none text-dark small fw-semibold">{{ n.title[:100] }}{% if n.title|length > 100 %}…{% endif %}</a>
-            {% if n.sentiment == 'POSITIVE' %}
-              <span class="badge bg-success-subtle text-success">+</span>
-            {% elif n.sentiment == 'NEGATIVE' %}
-              <span class="badge bg-danger-subtle text-danger">−</span>
-            {% else %}
-              <span class="badge bg-secondary-subtle text-secondary">~</span>
-            {% endif %}
+        <div class="px-3 py-2 d-flex gap-3 align-items-start" style="border-bottom:1px solid var(--border)">
+          <div style="flex:1;min-width:0">
+            <a href="{{ n.url }}" target="_blank" rel="noopener" class="text-decoration-none fw-semibold" style="font-size:13px;color:var(--text-primary)">
+              {{ n.title[:110] }}{% if n.title|length > 110 %}…{% endif %}
+            </a>
+            <div class="text-muted mt-1" style="font-size:11px">{{ n.source }} · {{ n.published_at[:16] if n.published_at else '' }}</div>
           </div>
-          <div class="text-muted" style="font-size:11px">{{ n.source }} · {{ n.published_at[:10] if n.published_at else '' }}</div>
-        </li>
+          {% if n.sentiment == 'POSITIVE' %}<span class="mm-sent-badge positive">+</span>
+          {% elif n.sentiment == 'NEGATIVE' %}<span class="mm-sent-badge negative">−</span>
+          {% else %}<span class="mm-sent-badge neutral">~</span>{% endif %}
+        </div>
         {% else %}
-        <li class="list-group-item text-center text-muted py-3">No news for {{ symbol }}.</li>
+        <div class="empty-state py-4"><i class="bi bi-newspaper"></i>No news for {{ symbol }}.</div>
         {% endfor %}
-      </ul>
       </div>
     </div>
-  </div>
-</div>
+  </div><!-- /col-lg-8 -->
+
+  <!-- Right column -->
+  <div class="col-lg-4">
+    <!-- Signal History -->
+    <div class="mm-card mb-3">
+      <div class="mm-card-header"><i class="bi bi-lightning text-accent me-1"></i>Signal History</div>
+      <div class="p-0" style="max-height:320px;overflow-y:auto">
+        {% for s in signals %}
+        <div class="px-3 py-2 d-flex align-items-center justify-content-between" style="border-bottom:1px solid var(--border)">
+          <div>
+            {% if s.signal_type == 'BUY' %}<span class="sig-buy">📈 BUY</span>
+            {% elif s.signal_type == 'SELL' %}<span class="sig-sell">📉 SELL</span>
+            {% else %}<span class="sig-hold">⏸ HOLD</span>{% endif %}
+            <span class="ms-2 small text-muted">{{ "%.0f"|format(s.confidence * 100) }}%</span>
+          </div>
+          <span class="text-muted" style="font-size:11px">{{ s.signal_date[:16] if s.signal_date else '-' }}</span>
+        </div>
+        {% else %}
+        <div class="empty-state py-4"><i class="bi bi-lightning"></i>No signals yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if signals %}
+    {% set ls = signals[0] %}
+    <div class="mm-card mb-3">
+      <div class="mm-card-header"><i class="bi bi-speedometer2 me-1"></i>AI Confidence</div>
+      <div class="mm-card-body text-center">
+        <canvas id="confidenceGauge" width="160" height="90"></canvas>
+        <div class="mt-2 small text-muted">Signal: <strong>{{ ls.signal_type }}</strong> · Risk: <strong>{{ ls.risk_level }}</strong></div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if bulk_deals %}
+    <div class="mm-card">
+      <div class="mm-card-header"><i class="bi bi-building me-1"></i>Bulk / Block Deals</div>
+      <div class="p-0" style="max-height:260px;overflow-y:auto">
+        {% for d in bulk_deals %}
+        <div class="px-3 py-2" style="border-bottom:1px solid var(--border)">
+          <div class="d-flex justify-content-between">
+            <span class="fw-semibold small">{{ d.client_name[:20] if d.client_name else 'Unknown' }}</span>
+            <span class="small {% if d.trade_type == 'BUY' %}text-success{% else %}text-danger{% endif %}">{{ d.trade_type }}</span>
+          </div>
+          <div class="text-muted" style="font-size:11px">{{ d.quantity|int if d.quantity else '?' }} shares{% if d.price %} @ ₹{{ d.price }}{% endif %} · {{ d.deal_date[:10] if d.deal_date else '' }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div><!-- /col-lg-4 -->
+</div><!-- /row -->
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Load price history from API and render line chart
-fetch('/api/stock/{{ symbol }}/history?limit=30')
-  .then(r => r.json())
-  .then(data => {
-    if (!data.length) return;
-    const reversed = data.reverse();
-    const labels = reversed.map(d => d.timestamp ? d.timestamp.slice(0, 10) : '');
-    const prices = reversed.map(d => d.price);
-    const ctx = document.getElementById('priceChart');
-    const trend = prices[prices.length-1] >= prices[0] ? '#198754' : '#dc3545';
-    new Chart(ctx, {
+const SYMBOL = '{{ symbol }}';
+let intradayChartObj = null;
+let histChartObj = null;
+
+const fmtINR = v => v == null ? '—' : '₹' + Number(v).toLocaleString('en-IN', {maximumFractionDigits: 2});
+const fmtVol = v => {
+  if (v == null) return '—';
+  if (v >= 1e7) return (v/1e7).toFixed(2) + ' Cr';
+  if (v >= 1e5) return (v/1e5).toFixed(2) + ' L';
+  return v.toLocaleString('en-IN');
+};
+const fmtCap = v => {
+  if (v == null) return '—';
+  if (v >= 1e12) return '₹' + (v/1e12).toFixed(2) + 'T';
+  if (v >= 1e9)  return '₹' + (v/1e9).toFixed(2) + 'B';
+  return '₹' + (v/1e7).toFixed(0) + ' Cr';
+};
+
+// ── Live Quote ───────────────────────────────────────────────────────────────
+async function loadLiveQuote() {
+  try {
+    const r = await fetch(`/api/stock/${SYMBOL}/live`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const isUp  = d.change >= 0;
+    const color = isUp ? '#22c55e' : '#f87171';
+    const sign  = d.change >= 0 ? '+' : '';
+    document.getElementById('livePriceBlock').innerHTML = `
+      <div class="mm-live-price" style="color:${color}">${fmtINR(d.price)}</div>
+      <div class="mm-live-change" style="color:${color}">
+        ${sign}${fmtINR(d.change)} &nbsp; (${sign}${d.change_pct.toFixed(2)}%)
+        <i class="bi bi-caret-${isUp?'up':'down'}-fill ms-1"></i>
+      </div>
+      <div class="text-muted mt-1" style="font-size:11px">
+        1Y: ${d.year_change_pct!=null ? (d.year_change_pct>=0?'+':'') + d.year_change_pct.toFixed(2)+'%' : '—'}
+      </div>`;
+    document.getElementById('liveCompanyName').textContent = d.symbol + ' · NSE';
+    document.getElementById('lsOpen').textContent  = fmtINR(d.open);
+    document.getElementById('lsHigh').textContent  = fmtINR(d.day_high);
+    document.getElementById('lsLow').textContent   = fmtINR(d.day_low);
+    document.getElementById('lsPrev').textContent  = fmtINR(d.prev_close);
+    document.getElementById('lsVol').textContent   = fmtVol(d.volume);
+    document.getElementById('lsCap').textContent   = fmtCap(d.market_cap);
+    document.getElementById('ls52H').textContent   = fmtINR(d.year_high);
+    document.getElementById('ls52L').textContent   = fmtINR(d.year_low);
+    if (d.year_high && d.year_low && d.price) {
+      const pct = Math.min(100, Math.max(0, (d.price - d.year_low) / (d.year_high - d.year_low) * 100));
+      document.getElementById('rangeMin').textContent = fmtINR(d.year_low);
+      document.getElementById('rangeMax').textContent = fmtINR(d.year_high);
+      document.getElementById('rangeFill').style.width = pct + '%';
+      document.getElementById('rangeThumb').style.left = 'calc(' + pct + '% - 6px)';
+      document.getElementById('rangeBarWrap').style.display = '';
+    }
+    document.getElementById('liveUpdateTime').textContent =
+      'Updated ' + new Date().toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  } catch(e) {
+    document.getElementById('livePriceBlock').innerHTML =
+      `<div class="text-muted small">Live data unavailable<br><small>${e.message}</small></div>`;
+  }
+}
+
+// ── Intraday Chart ───────────────────────────────────────────────────────────
+async function loadIntradayChart() {
+  const loading = document.getElementById('chartLoading');
+  loading.style.display = 'flex';
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-2 text-accent"></span><span class="text-muted small">Loading…</span>';
+  try {
+    const r = await fetch(`/api/stock/${SYMBOL}/intraday`);
+    const d = await r.json();
+    loading.style.display = 'none';
+    if (!d.length) {
+      loading.style.display = 'flex';
+      loading.innerHTML = '<span class="text-muted small">No intraday data (market may be closed)</span>';
+      return;
+    }
+    const prices = d.map(p => p.c);
+    const isUp   = prices[prices.length-1] >= prices[0];
+    const color  = isUp ? '#22c55e' : '#f87171';
+    if (intradayChartObj) intradayChartObj.destroy();
+    intradayChartObj = new Chart(document.getElementById('intradayChart'), {
       type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: '{{ symbol }} Price (₹)',
-          data: prices,
-          borderColor: trend,
-          backgroundColor: trend + '22',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 3,
-        }]
-      },
+      data: { labels: d.map(p => p.t), datasets: [{
+        data: prices, borderColor: color, backgroundColor: color+'18',
+        borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 4,
+      }]},
       options: {
-        plugins: { legend: { display: false } },
+        animation: false,
+        plugins: { legend: { display: false },
+          tooltip: { callbacks: { label: c => '₹' + c.parsed.y.toLocaleString('en-IN') } }
+        },
         scales: {
-          y: { ticks: { callback: v => '₹' + v.toLocaleString('en-IN') } }
+          x: { ticks: { maxTicksLimit: 8, color:'#64748b', font:{size:10} }, grid:{display:false} },
+          y: { ticks: { callback: v => '₹'+v.toLocaleString('en-IN'), color:'#64748b', font:{size:10} }, grid:{color:'#1e293b'} }
+        },
+        interaction: { intersect: false, mode: 'index' },
+      }
+    });
+  } catch(e) {
+    loading.style.display = 'flex';
+    loading.innerHTML = '<span class="text-muted small">Chart unavailable</span>';
+  }
+}
+
+// ── Chart range switcher ─────────────────────────────────────────────────────
+async function switchChartRange(range, btn) {
+  document.querySelectorAll('#chartRangeButtons .mm-chip-sm').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (range === 'intraday') { loadIntradayChart(); return; }
+  const loading = document.getElementById('chartLoading');
+  loading.style.display = 'flex';
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-2 text-accent"></span><span class="text-muted small">Loading…</span>';
+  const pmap = { '7d':'7d', '1m':'1mo', '3m':'3mo' };
+  const imap = { '7d':'1d', '1m':'1d', '3m':'1wk' };
+  try {
+    const r = await fetch(`/api/stock/${SYMBOL}/range?period=${pmap[range]}&interval=${imap[range]}`);
+    const d = await r.json();
+    loading.style.display = 'none';
+    if (!d.length) { loading.style.display='flex'; loading.innerHTML='<span class="text-muted small">No data</span>'; return; }
+    const prices = d.map(p => p.c);
+    const isUp   = prices[prices.length-1] >= prices[0];
+    const color  = isUp ? '#22c55e' : '#f87171';
+    if (intradayChartObj) intradayChartObj.destroy();
+    intradayChartObj = new Chart(document.getElementById('intradayChart'), {
+      type: 'line',
+      data: { labels: d.map(p => p.t), datasets: [{
+        data: prices, borderColor: color, backgroundColor: color+'18',
+        borderWidth: 2, fill: true, tension: 0.2, pointRadius: 0, pointHoverRadius: 4,
+      }]},
+      options: {
+        animation:false,
+        plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>'₹'+c.parsed.y.toLocaleString('en-IN')}}},
+        scales:{
+          x:{ticks:{maxTicksLimit:8,color:'#64748b',font:{size:10}},grid:{display:false}},
+          y:{ticks:{callback:v=>'₹'+v.toLocaleString('en-IN'),color:'#64748b',font:{size:10}},grid:{color:'#1e293b'}}
+        },
+        interaction:{intersect:false,mode:'index'},
+      }
+    });
+  } catch { loading.style.display='flex'; loading.innerHTML='<span class="text-muted small">Range unavailable</span>'; }
+}
+
+// ── DB Historical chart ──────────────────────────────────────────────────────
+async function loadHistChart() {
+  try {
+    const r = await fetch(`/api/stock/${SYMBOL}/history?limit=30`);
+    const d = await r.json();
+    if (!d.length) return;
+    const rev    = [...d].reverse();
+    const prices = rev.map(x => x.price);
+    const isUp   = prices[prices.length-1] >= prices[0];
+    const color  = isUp ? '#22c55e' : '#f87171';
+    if (histChartObj) histChartObj.destroy();
+    histChartObj = new Chart(document.getElementById('priceChart'), {
+      type: 'line',
+      data: { labels: rev.map(x => (x.timestamp||'').slice(0,10)),
+        datasets: [{ label: SYMBOL+' (₹)', data: prices, borderColor: color,
+          backgroundColor: color+'22', fill: true, tension: 0.3, pointRadius: 2 }]
+      },
+      options: { plugins:{legend:{display:false}},
+        scales:{
+          x:{ticks:{maxTicksLimit:8,color:'#64748b',font:{size:10}},grid:{display:false}},
+          y:{ticks:{callback:v=>'₹'+v.toLocaleString('en-IN'),color:'#64748b',font:{size:10}},grid:{color:'#1e293b'}}
         }
       }
     });
-  });
+  } catch {}
+}
+
+// ── Confidence gauge ─────────────────────────────────────────────────────────
+{% if signals %}
+(function(){
+  const canvas = document.getElementById('confidenceGauge');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d'), cx=80, cy=80, r=55;
+  const pct = {{ "%.0f"|format(signals[0].confidence * 100) }};
+  ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,0); ctx.strokeStyle='#1e293b'; ctx.lineWidth=14; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,Math.PI+(pct/100)*Math.PI);
+  ctx.strokeStyle = pct>70?'#22c55e':pct>45?'#fbbf24':'#f87171';
+  ctx.lineWidth=14; ctx.stroke();
+  ctx.fillStyle='var(--text-primary,#f8fafc)'; ctx.font='bold 18px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(pct+'%', cx, cy+6);
+})();
+{% endif %}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadLiveQuote();
+  loadIntradayChart();
+  loadHistChart();
+  setInterval(loadLiveQuote, 60000);
+});
 </script>
 {% endblock %}

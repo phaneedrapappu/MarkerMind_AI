@@ -222,15 +222,48 @@ class AIAnalysisAgent(BaseAgent):
                 for a in snapshot.institutional_activity:
                     stocks_summary += f"{a.institution_type}: Net Rs{a.net_value:+,.0f}Cr\n"
 
+            # Attach recent news headlines from DB
+            news_pos = news_neg = news_total = 0
+            if self.db:
+                try:
+                    recent_news = self.db.get_news(symbol=stock.symbol, limit=8)
+                    if recent_news:
+                        news_total = len(recent_news)
+                        headlines = []
+                        for n in recent_news:
+                            sent = n.get("sentiment", "NEUTRAL")
+                            if sent == "POSITIVE":
+                                news_pos += 1
+                            elif sent == "NEGATIVE":
+                                news_neg += 1
+                            headlines.append(f"[{sent}] {n.get('title','')[:80]}")
+                        stocks_summary += f"Recent news ({news_total} articles, +{news_pos}/-{news_neg}):\n"
+                        stocks_summary += "\n".join(f"  • {h}" for h in headlines[:5]) + "\n"
+                except Exception:
+                    pass
+            # Store news counts on snapshot so we can attach them to the report later
+            snapshot._news_pos   = news_pos    # type: ignore[attr-defined]
+            snapshot._news_neg   = news_neg    # type: ignore[attr-defined]
+            snapshot._news_total = news_total  # type: ignore[attr-defined]
+
         system_msg = (
             "You are an expert financial analyst specialising in Indian stock markets. "
-            "Return ONLY a valid JSON array (no markdown fences) where each element has keys: "
-            "symbol (string), sentiment (Bullish/Bearish/Neutral), "
-            "highlights (list of 3 strings), concerns (list of 1-2 strings), "
-            "analysis (2-3 sentence plain-text summary)."
+            "Return ONLY a valid JSON array (no markdown fences, no extra commentary) "
+            "where each element has exactly these keys:\n"
+            "  symbol       – NSE ticker (string)\n"
+            "  sentiment    – one of: Bullish, Bearish, Neutral\n"
+            "  signal       – one of: BUY, SELL, HOLD\n"
+            "  confidence   – integer 0-100 reflecting your conviction based on price action, "
+                              "news sentiment, volume, and available data quality. "
+                              "Use the full range: strong signal with good data = 75-95, "
+                              "weak/mixed evidence = 40-60, contradictory signals = 30-50.\n"
+            "  highlights   – list of 3 concise strings (key positive factors)\n"
+            "  concerns     – list of 1-2 concise strings (key risk factors)\n"
+            "  analysis     – 2-3 sentence plain-text summary\n"
         )
         user_msg = (
-            f"Analyse the following {len(snapshots)} Indian stocks and return structured JSON:\n"
+            f"Analyse the following {len(snapshots)} Indian stocks. "
+            f"Set confidence independently per stock based on the evidence provided.\n"
             f"{stocks_summary}"
         )
 
@@ -241,10 +274,11 @@ class AIAnalysisAgent(BaseAgent):
         for snapshot in snapshots:
             stock = snapshot.stock_data
             item = next((p for p in parsed if p.get("symbol") == stock.symbol), {})
-            sentiment = item.get("sentiment", "Neutral")
-            highlights = item.get("highlights", [])
-            concerns = item.get("concerns", [])
+            sentiment    = item.get("sentiment", "Neutral")
+            highlights   = item.get("highlights", [])
+            concerns     = item.get("concerns", [])
             analysis_text = item.get("analysis", raw)
+            llm_confidence = float(item.get("confidence", 55))
 
             daily = DailyTradingAnalysis(
                 symbol=stock.symbol,
@@ -263,6 +297,11 @@ class AIAnalysisAgent(BaseAgent):
                 key_highlights=highlights,
                 concerns=concerns,
                 raw_llm_response=analysis_text,
+                llm_confidence=llm_confidence,
+                price_change_pct=stock.change_percent,
+                news_pos=getattr(snapshot, "_news_pos", 0),
+                news_neg=getattr(snapshot, "_news_neg", 0),
+                news_total=getattr(snapshot, "_news_total", 0),
             )
             self._print_analysis_summary(report)
             results.append(report)

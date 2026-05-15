@@ -48,6 +48,7 @@ let _runModal = null;
 function openRunModal() {
   if (!_runModal) _runModal = new bootstrap.Modal(document.getElementById('runModal'));
   loadStockCatalog();
+  loadRunPresets();
   updateRunSummary();
   _runModal.show();
 }
@@ -141,6 +142,30 @@ function selectPreset(stocks) {
   renderStockGrid(document.getElementById('stockSearch')?.value || '');
   updateRunSummary();
   showToast(`Selected ${stocks.length} stocks`, 'info');
+}
+
+let _runPresetsLoaded = false;
+async function loadRunPresets() {
+  if (_runPresetsLoaded) return;
+  const cont = document.getElementById('runPresetBtns');
+  if (!cont) return;
+  try {
+    const r = await fetch('/api/stocks/presets');
+    const presets = await r.json();
+    cont.innerHTML = presets.map(p =>
+      `<button class="mm-preset-btn" onclick="selectPreset(${JSON.stringify(p.stocks)})">${p.label}</button>`
+    ).join('');
+    _runPresetsLoaded = true;
+  } catch {
+    cont.innerHTML = [
+      ['IT Leaders', ['TCS','INFY','WIPRO','HCLTECH','TECHM']],
+      ['Banking',    ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK']],
+      ['Energy',     ['RELIANCE','ONGC','NTPC','TATAPOWER']],
+      ['Nifty Mix',  ['TCS','INFY','HDFCBANK','RELIANCE','DMART']],
+    ].map(([l,s]) =>
+      `<button class="mm-preset-btn" onclick="selectPreset(${JSON.stringify(s)})">${l}</button>`
+    ).join('');
+  }
 }
 
 function updateSelectedCount() {

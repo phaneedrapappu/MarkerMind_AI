@@ -24,18 +24,25 @@ GOOGLE_NEWS_RSS = (
 ET_MARKETS_RSS = "https://economictimes.indiatimes.com/markets/rss.cms"
 MONEYCONTROL_RSS = "https://www.moneycontrol.com/rssfeeds/marketsnews.xml"
 
-# ── Global / World market RSS feeds ───────────────────────────────────────────
+# ── Global feeds that IMPACT Indian markets ───────────────────────────────────
+# Scope: only news directly relevant to Indian equities — US Fed rates,
+# crude oil, USD/INR, FII/FPI flows, global commodities, trade policy.
 GLOBAL_FEEDS = [
-    # Reuters Business / Finance
-    ("https://feeds.reuters.com/reuters/businessNews", "Reuters Business"),
-    ("https://feeds.reuters.com/reuters/technologyNews", "Reuters Tech"),
-    # Yahoo Finance world markets
-    ("https://finance.yahoo.com/news/rssindex", "Yahoo Finance"),
-    # Google News – global markets query
-    ("https://news.google.com/rss/search?q=global+stock+market+wall+street&hl=en&gl=US&ceid=US:en", "Google News Global"),
-    # Seeking Alpha / Investing.com news feed
-    ("https://www.investing.com/rss/news.rss", "Investing.com"),
-    # Livemint – Indian market with global context
+    # US Fed / interest rate decisions (biggest FII trigger)
+    ("https://news.google.com/rss/search?q=US+Federal+Reserve+interest+rate+India+impact&hl=en-IN&gl=IN&ceid=IN:en", "US Fed / Rates"),
+    # Crude oil prices — directly impact India's CAD, OMCs, aviation
+    ("https://news.google.com/rss/search?q=crude+oil+price+India&hl=en-IN&gl=IN&ceid=IN:en", "Crude Oil"),
+    # USD/INR exchange rate — affects IT exporters, importers
+    ("https://news.google.com/rss/search?q=USD+INR+rupee+dollar+exchange+rate&hl=en-IN&gl=IN&ceid=IN:en", "USD/INR"),
+    # FII / FPI inflows and outflows into Indian markets
+    ("https://news.google.com/rss/search?q=FII+FPI+India+stock+market+inflow+outflow&hl=en-IN&gl=IN&ceid=IN:en", "FII/FPI Flows"),
+    # Global commodity prices — metals, agri affect Indian sectors
+    ("https://news.google.com/rss/search?q=global+commodity+prices+India+impact+metals+agri&hl=en-IN&gl=IN&ceid=IN:en", "Commodities"),
+    # US-India trade / tariff news
+    ("https://news.google.com/rss/search?q=US+India+trade+tariff+export&hl=en-IN&gl=IN&ceid=IN:en", "US-India Trade"),
+    # China economy — impacts Indian IT, pharma, manufacturing
+    ("https://news.google.com/rss/search?q=China+economy+India+stock+market&hl=en-IN&gl=IN&ceid=IN:en", "China Impact"),
+    # Livemint global context
     ("https://www.livemint.com/rss/markets", "Livemint Markets"),
 ]
 

@@ -26,6 +26,9 @@
       <a href="/" class="mm-nav-link {% if request.path == '/' %}active{% endif %}">
         <i class="bi bi-speedometer2"></i> Dashboard
       </a>
+      <a href="/stocks" class="mm-nav-link {% if request.path.startswith('/stocks') or request.path.startswith('/stock/') %}active{% endif %}">
+        <i class="bi bi-bar-chart-line"></i> Markets
+      </a>
       <a href="/alerts" class="mm-nav-link {% if request.path == '/alerts' %}active{% endif %}">
         <i class="bi bi-bell"></i> Alerts
       </a>
@@ -60,6 +63,10 @@
   <a href="/" class="mm-bottom-item {% if request.path == '/' %}active{% endif %}">
     <i class="bi bi-speedometer2"></i>
     <span>Dashboard</span>
+  </a>
+  <a href="/stocks" class="mm-bottom-item {% if request.path.startswith('/stocks') or request.path.startswith('/stock/') %}active{% endif %}">
+    <i class="bi bi-bar-chart-line"></i>
+    <span>Markets</span>
   </a>
   <a href="/alerts" class="mm-bottom-item {% if request.path == '/alerts' %}active{% endif %}">
     <i class="bi bi-bell"></i>
@@ -121,13 +128,10 @@
             <div class="text-muted small text-center py-4">Loading stocks…</div>
           </div>
 
-          <!-- Quick presets -->
+          <!-- Quick presets (loaded dynamically) -->
           <div class="mm-presets">
             <span class="text-muted small me-2">Quick:</span>
-            <button class="mm-preset-btn" onclick="selectPreset(['TCS','INFY','WIPRO','HCLTECH'])">IT Top 4</button>
-            <button class="mm-preset-btn" onclick="selectPreset(['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK'])">Banking Top 4</button>
-            <button class="mm-preset-btn" onclick="selectPreset(['RELIANCE','ONGC','NTPC','TATAPOWER'])">Energy</button>
-            <button class="mm-preset-btn" onclick="selectPreset(['TCS','INFY','HDFCBANK','RELIANCE','DMART'])">Nifty Mix</button>
+            <span id="runPresetBtns"><span class="spinner-border spinner-border-sm me-1" style="width:12px;height:12px"></span></span>
           </div>
         </div>
 
