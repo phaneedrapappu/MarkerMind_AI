@@ -93,6 +93,10 @@
       <label class="form-label fw-semibold" style="font-size:14px">
         <i class="bi bi-graph-up me-1"></i>Stocks to Track
         <span class="ms-2 mm-selected-count" id="subSelCount">0 selected</span>
+        <button class="mm-btn-outline-sm ms-2" onclick="subClearAll()" id="subClearBtn"
+                style="font-size:11px;padding:2px 8px;display:none">
+          <i class="bi bi-x-circle me-1"></i>Clear All
+        </button>
         <span id="subLiveBadge" class="mm-live-badge ms-2" style="display:none">
           <span class="mm-live-dot"></span>Live NSE list
         </span>
@@ -120,10 +124,7 @@
       <!-- Presets -->
       <div class="mm-presets mt-2">
         <span class="text-muted small me-2">Quick:</span>
-        <button class="mm-preset-btn" onclick="subSelectPreset(['TCS','INFY','WIPRO','HCLTECH'])">IT Top 4</button>
-        <button class="mm-preset-btn" onclick="subSelectPreset(['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK'])">Banking</button>
-        <button class="mm-preset-btn" onclick="subSelectPreset(['RELIANCE','ONGC','NTPC','TATAPOWER'])">Energy</button>
-        <button class="mm-preset-btn" onclick="subSelectPreset(['TCS','INFY','HDFCBANK','RELIANCE','DMART'])">Nifty Mix</button>
+        <span id="subPresetBtns"><span class="spinner-border spinner-border-sm me-1"></span>Loading presets…</span>
       </div>
     </div>
 
@@ -171,9 +172,25 @@ let subCurrentStocks = {};  // filtered view
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSubStocks();
-  // Enable subscribe button when both email and stocks are filled
+  loadSubPresets();
   document.getElementById('subEmail').addEventListener('input', updateSubBtn);
 });
+
+async function loadSubPresets() {
+  try {
+    const r = await fetch('/api/stocks/presets');
+    const presets = await r.json();
+    const cont = document.getElementById('subPresetBtns');
+    cont.innerHTML = presets.map(p =>
+      `<button class="mm-preset-btn" onclick="subSelectPreset(${JSON.stringify(p.stocks)})">${p.label}</button>`
+    ).join('');
+  } catch {
+    document.getElementById('subPresetBtns').innerHTML =
+      ['IT Leaders|TCS,INFY,WIPRO,HCLTECH', 'Banking|HDFCBANK,ICICIBANK,SBIN,KOTAKBANK',
+       'Energy|RELIANCE,ONGC,NTPC,TATAPOWER', 'Nifty Mix|TCS,INFY,HDFCBANK,RELIANCE,DMART']
+      .map(p => { const[l,s]=p.split('|'); return `<button class="mm-preset-btn" onclick="subSelectPreset(['${s.split(',').join("','")}'\])">` + l + '</button>'; }).join('');
+  }
+}
 
 async function loadSubStocks() {
   // Try dynamic live NSE list first, fall back to hardcoded catalog
@@ -270,14 +287,26 @@ function subToggleStock(sym) {
   if (subSelectedStocks.has(sym)) subSelectedStocks.delete(sym);
   else subSelectedStocks.add(sym);
   renderSubGrid(subCurrentStocks);
-  document.getElementById('subSelCount').textContent = `${subSelectedStocks.size} selected`;
+  const cnt = subSelectedStocks.size;
+  document.getElementById('subSelCount').textContent = `${cnt} selected`;
+  document.getElementById('subClearBtn').style.display = cnt > 0 ? 'inline-flex' : 'none';
   updateSubBtn();
 }
 
 function subSelectPreset(tickers) {
   subSelectedStocks = new Set(tickers);
   renderSubGrid(subCurrentStocks);
-  document.getElementById('subSelCount').textContent = `${subSelectedStocks.size} selected`;
+  const cnt = subSelectedStocks.size;
+  document.getElementById('subSelCount').textContent = `${cnt} selected`;
+  document.getElementById('subClearBtn').style.display = cnt > 0 ? 'inline-flex' : 'none';
+  updateSubBtn();
+}
+
+function subClearAll() {
+  subSelectedStocks.clear();
+  renderSubGrid(subCurrentStocks);
+  document.getElementById('subSelCount').textContent = '0 selected';
+  document.getElementById('subClearBtn').style.display = 'none';
   updateSubBtn();
 }
 

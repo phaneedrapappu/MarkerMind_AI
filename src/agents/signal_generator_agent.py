@@ -168,8 +168,11 @@ class SignalGeneratorAgent(BaseAgent):
         # Calculate total score
         total_score = sum(scores.values())
         
-        # Determine signal based on score
-        signal_type, confidence, risk_level = self._score_to_signal(total_score, scores)
+        # Determine signal type and base confidence from score
+        signal_type, _, risk_level = self._score_to_signal(total_score, scores)
+
+        # Compute real, data-driven confidence
+        confidence = self._compute_real_confidence(analysis, signal_type, total_score)
         
         # Generate reasoning
         reasoning = self._generate_reasoning(analysis, total_score, scores)
@@ -191,46 +194,82 @@ class SignalGeneratorAgent(BaseAgent):
     
     def _score_to_signal(self, total_score: int, scores: Dict[str, int]) -> tuple:
         """
-        Convert score to signal type, confidence, and risk level
-        
-        Args:
-            total_score: Total score from all factors
-            scores: Individual factor scores
-            
-        Returns:
-            (SignalType, confidence, RiskLevel)
+        Convert score to (SignalType, placeholder_confidence, RiskLevel).
+        Confidence is now computed by _compute_real_confidence — this method
+        only determines signal direction and risk level.
         """
-        # Determine signal type
         if total_score >= 5:
-            signal_type = SignalType.STRONG_BUY
-            confidence = min(90, 70 + total_score * 3)
-            risk_level = RiskLevel.MEDIUM
+            return SignalType.STRONG_BUY, 0, RiskLevel.MEDIUM
         elif total_score >= 3:
-            signal_type = SignalType.BUY
-            confidence = min(85, 60 + total_score * 5)
-            risk_level = RiskLevel.MEDIUM
+            return SignalType.BUY, 0, RiskLevel.MEDIUM
         elif total_score >= 1:
-            signal_type = SignalType.BUY
-            confidence = min(75, 50 + total_score * 8)
-            risk_level = RiskLevel.MEDIUM
+            return SignalType.BUY, 0, RiskLevel.MEDIUM
         elif total_score <= -5:
-            signal_type = SignalType.STRONG_SELL
-            confidence = min(90, 70 + abs(total_score) * 3)
-            risk_level = RiskLevel.HIGH
+            return SignalType.STRONG_SELL, 0, RiskLevel.HIGH
         elif total_score <= -3:
-            signal_type = SignalType.SELL
-            confidence = min(85, 60 + abs(total_score) * 5)
-            risk_level = RiskLevel.HIGH
+            return SignalType.SELL, 0, RiskLevel.HIGH
         elif total_score <= -1:
-            signal_type = SignalType.REDUCE_EXPOSURE
-            confidence = min(75, 50 + abs(total_score) * 8)
-            risk_level = RiskLevel.MEDIUM
-        else:  # total_score == 0
-            signal_type = SignalType.HOLD
-            confidence = 60
-            risk_level = RiskLevel.LOW
-        
-        return signal_type, confidence, risk_level
+            return SignalType.REDUCE_EXPOSURE, 0, RiskLevel.MEDIUM
+        else:
+            return SignalType.HOLD, 0, RiskLevel.LOW
+
+    def _compute_real_confidence(self, analysis: AIAnalysisReport,
+                                  signal_type: SignalType,
+                                  total_score: int) -> float:
+        """
+        Compute a data-driven confidence score (0-100).
+        Sources (all independent per stock):
+          1. Gemini's own confidence integer (primary — most accurate)
+          2. Actual price change %   — big moves signal stronger conviction
+          3. News sentiment skew     — majority pos/neg = more certainty
+          4. LLM text strength clues — "strongly bullish/bearish" keywords
+          5. Score magnitude fallback — only when Gemini gave no confidence
+        """
+        import re as _re
+
+        # ── 1. Base: Gemini confidence or score-derived ─────────────────────
+        if analysis.llm_confidence is not None:
+            base = float(analysis.llm_confidence)
+        else:
+            score_abs = abs(total_score)
+            if score_abs >= 5:   base = 72.0
+            elif score_abs >= 3: base = 62.0
+            elif score_abs >= 1: base = 52.0
+            else:                base = 42.0
+
+        # ── 2. Real price change % (parse from daily_trading if not direct) ─
+        pct = analysis.price_change_pct
+        if pct == 0.0 and analysis.daily_trading:
+            m = _re.search(r"([+-]?\d+\.?\d*)\s*%",
+                           analysis.daily_trading.price_movement or "")
+            if m:
+                try: pct = float(m.group(1))
+                except ValueError: pass
+        price_factor = min(abs(pct) * 1.8, 12.0)   # ±0..12 pts
+
+        # ── 3. News sentiment consensus (±0..8 pts) ─────────────────────────
+        news_factor = 0.0
+        if analysis.news_total > 0:
+            skew = max(analysis.news_pos, analysis.news_neg) / analysis.news_total
+            news_factor = skew * 8.0
+
+        # ── 4. LLM text strength bonus (±0..6 pts) ──────────────────────────
+        text_bonus = 0.0
+        if analysis.raw_llm_response:
+            lower = analysis.raw_llm_response.lower()
+            pos_hits = sum(1 for w in ["strongly bullish", "strong buy", "high conviction",
+                                        "significantly outperform", "breakout", "robust"]
+                           if w in lower)
+            neg_hits = sum(1 for w in ["strongly bearish", "strong sell", "high risk",
+                                        "significant downside", "breakdown", "caution"]
+                           if w in lower)
+            text_bonus = max(min((pos_hits - neg_hits) * 2.0, 6.0), -6.0)
+
+        # ── 5. HOLD penalty — inherently uncertain ──────────────────────────
+        hold_penalty = -10.0 if signal_type == SignalType.HOLD else 0.0
+
+        raw = base + price_factor + news_factor + text_bonus + hold_penalty
+        return round(min(max(raw, 28.0), 97.0), 1)
     
     def _generate_reasoning(self, analysis: AIAnalysisReport, total_score: int, scores: Dict[str, int]) -> str:
         """

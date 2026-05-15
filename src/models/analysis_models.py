@@ -130,6 +130,14 @@ class AIAnalysisReport:
     
     # Raw LLM response (for debugging)
     raw_llm_response: str = ""
+
+    # Confidence directly from LLM (0-100).  None = not yet set.
+    llm_confidence: Optional[float] = None
+    # Real market metrics carried forward to signal generator
+    price_change_pct: float = 0.0    # actual % price change from market data
+    news_pos: int = 0                 # count of positive news articles
+    news_neg: int = 0                 # count of negative news articles
+    news_total: int = 0               # total news articles fetched
     
     def to_dict(self) -> Dict:
         return {

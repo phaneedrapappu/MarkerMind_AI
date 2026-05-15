@@ -81,12 +81,14 @@ def dashboard():
     db = get_db()
     summary = db.get_dashboard_summary()
     signals = db.get_latest_signals(10)
+    signals_all = db.get_latest_signals(100)
     news = db.get_news(limit=10)
     alerts = db.get_recent_alerts(5)
     return render_template(
         "dashboard.html",
         summary=summary,
         signals=signals,
+        signals_all=signals_all,
         news=news,
         alerts=alerts,
         now=datetime.now().strftime("%d %b %Y, %I:%M %p"),
@@ -455,6 +457,360 @@ def api_news_global():
     limit = int(request.args.get("limit", 30))
     db = get_db()
     return jsonify(db.get_global_news(limit=limit))
+
+
+# ── News-based AI stock suggestions ───────────────────────────────────────────
+_news_suggestions_cache: dict = {"ts": None, "data": None}
+_NEWS_CACHE_SECONDS = 900   # 15 minutes
+
+@app.route("/api/news/suggestions", methods=["POST"])
+def api_news_suggestions():
+    """
+    Analyse latest news from DB and return AI-generated stock suggestions.
+    Uses Gemini to map news to NSE tickers with BUY / SELL / HOLD recommendations.
+    Results are cached for 15 minutes to avoid repeated LLM calls.
+    """
+    import time
+    now = time.time()
+
+    # Serve from cache if fresh
+    if (_news_suggestions_cache["ts"] and
+            now - _news_suggestions_cache["ts"] < _NEWS_CACHE_SECONDS and
+            _news_suggestions_cache["data"]):
+        return jsonify({"suggestions": _news_suggestions_cache["data"], "cached": True})
+
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not gemini_key:
+        return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
+
+    db = get_db()
+    # Fetch recent Indian market + global news
+    indian_news = db.get_news(limit=20)
+    global_news = db.get_global_news(limit=15)
+    all_news = indian_news + global_news
+
+    if not all_news:
+        return jsonify({"error": "No news in database yet. Run the pipeline first."}), 404
+
+    headlines = []
+    for n in all_news[:35]:
+        sent  = n.get("sentiment", "NEUTRAL")
+        sym   = n.get("symbol", "")
+        label = f"[{sym}] " if sym and sym != "__GLOBAL__" else "[GLOBAL] "
+        headlines.append(f"{label}[{sent}] {n.get('title', '')[:100]}")
+
+    news_block = "\n".join(f"  • {h}" for h in headlines)
+
+    prompt = (
+        "You are an expert Indian stock market analyst.\n"
+        "Based on the following recent news headlines affecting Indian markets, "
+        "identify NSE-listed stocks that investors should consider. "
+        "Return ONLY a valid JSON array. Each element must have:\n"
+        "  symbol    – NSE ticker (e.g. RELIANCE, TCS, HDFCBANK)\n"
+        "  action    – one of: BUY, SELL, HOLD, WATCH\n"
+        "  reason    – 1-2 sentence explanation directly referencing the news\n"
+        "  confidence– integer 0-100\n"
+        "  sector    – sector name (e.g. IT, Banking, Energy)\n\n"
+        "Rules:\n"
+        "- Only include stocks where the news has a clear, direct impact\n"
+        "- GLOBAL news (FED rates, crude oil, USD/INR) should map to specific "
+          "Indian sectors/stocks it affects\n"
+        "- Return 5-10 suggestions maximum\n"
+        "- Do not include stocks if the connection is speculative\n\n"
+        f"News headlines:\n{news_block}"
+    )
+
+    try:
+        import re, json as _json, time as _t
+        from google import genai as google_genai
+        client = google_genai.Client(api_key=gemini_key)
+        model  = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+        # Retry up to 3 times on 503 / overload with exponential backoff
+        last_exc = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(model=model, contents=prompt)
+                break
+            except Exception as e:
+                last_exc = e
+                err_str = str(e).lower()
+                is_overload = ("503" in err_str or "unavailable" in err_str or
+                               "high demand" in err_str or "overloaded" in err_str)
+                if is_overload and attempt < 2:
+                    wait = 4 * (2 ** attempt)   # 4s, 8s
+                    app.logger.warning(f"Gemini 503 on attempt {attempt+1}, retrying in {wait}s")
+                    _t.sleep(wait)
+                    continue
+                raise
+        else:
+            raise last_exc
+
+        raw = response.text or ""
+
+        # Parse JSON from response
+        raw = raw.strip()
+        m = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", raw)
+        if m:
+            raw = m.group(1)
+        else:
+            m2 = re.search(r"(\[[\s\S]*\])", raw)
+            if m2:
+                raw = m2.group(1)
+        suggestions = _json.loads(raw)
+
+        _news_suggestions_cache["ts"]   = now
+        _news_suggestions_cache["data"] = suggestions
+        return jsonify({"suggestions": suggestions, "cached": False})
+
+    except Exception as exc:
+        err_str = str(exc).lower()
+        is_overload = ("503" in err_str or "unavailable" in err_str or
+                       "high demand" in err_str or "overloaded" in err_str)
+        app.logger.error(f"News suggestions error: {exc}")
+        if is_overload:
+            return jsonify({
+                "error": "503 — Gemini is experiencing high demand. Please try again in a minute.",
+                "retry_after": 60,
+            }), 503
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Live Market Data ───────────────────────────────────────────────────────────
+import time as _time
+
+_live_cache: dict = {}
+_LIVE_CACHE_SECS = 60   # 1-minute cache for individual quotes
+_MOVERS_CACHE_SECS = 300  # 5-minute cache for movers
+
+# Nifty 50 representative symbols used for movers / discovery
+NIFTY50_SYMBOLS = [
+    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "HINDUNILVR",
+    "INFY", "ITC", "SBIN", "BAJFINANCE", "BHARTIARTL",
+    "KOTAKBANK", "LT", "AXISBANK", "ASIANPAINT", "MARUTI",
+    "TITAN", "SUNPHARMA", "ULTRACEMCO", "WIPRO", "NESTLEIND",
+    "TECHM", "HCLTECH", "TATAMOTORS", "ONGC", "POWERGRID",
+    "NTPC", "JSWSTEEL", "TATASTEEL", "GRASIM", "ADANIPORTS",
+    "DMART", "DRREDDY", "DIVISLAB", "CIPLA", "BAJAJ-AUTO",
+    "M&M", "EICHERMOT", "HEROMOTOCO", "COALINDIA", "BPCL",
+    "TATACONSUM", "BRITANNIA", "HINDALCO", "INDUSINDBK",
+    "APOLLOHOSP", "HDFCLIFE", "SBILIFE", "ZOMATO", "NYKAA", "PAYTM",
+]
+
+def _yf_sym(sym: str) -> str:
+    """Convert NSE symbol to Yahoo Finance .NS format."""
+    s = sym.replace("&", "%26")
+    return s if s.endswith(".NS") else s + ".NS"
+
+
+@app.route("/stocks")
+def stocks_page():
+    db = get_db()
+    signals = db.get_latest_signals(50)
+    recently_analyzed = list({s["symbol"]: s for s in signals}.values())[:8]
+    return render_template("stocks.html", recently_analyzed=recently_analyzed)
+
+
+@app.route("/api/stock/<symbol>/range")
+def api_stock_range(symbol: str):
+    """Multi-period OHLC data for the chart range switcher."""
+    sym      = symbol.upper()
+    period   = request.args.get("period", "1mo")
+    interval = request.args.get("interval", "1d")
+    cache_key = f"range_{sym}_{period}_{interval}"
+    now = _time.time()
+    if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < 600:
+        return jsonify(_live_cache[cache_key]["data"])
+    try:
+        import yfinance as yf
+        df = yf.download(_yf_sym(sym), period=period, interval=interval,
+                         progress=False, auto_adjust=True)
+        if df.empty:
+            return jsonify([])
+        records = []
+        for ts, row in df.iterrows():
+            try:
+                cv = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
+                records.append({"t": ts.strftime("%d %b" if interval in ("1d","1wk") else "%H:%M"),
+                                 "c": round(cv, 2)})
+            except Exception:
+                continue
+        _live_cache[cache_key] = {"ts": now, "data": records}
+        return jsonify(records)
+    except Exception as exc:
+        app.logger.error(f"Range error for {sym}: {exc}")
+        return jsonify([])
+
+
+@app.route("/api/stock/<symbol>/live")
+def api_stock_live(symbol: str):
+    """Live quote for a single NSE stock using yfinance (1-min cache)."""
+    sym = symbol.upper()
+    cache_key = f"live_{sym}"
+    now = _time.time()
+    if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
+        return jsonify(_live_cache[cache_key]["data"])
+    try:
+        import yfinance as yf
+        fi = yf.Ticker(_yf_sym(sym)).fast_info
+        change = fi.last_price - fi.previous_close
+        change_pct = (change / fi.previous_close * 100) if fi.previous_close else 0
+        data = {
+            "symbol": sym,
+            "price": round(fi.last_price, 2),
+            "change": round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "open": round(fi.open, 2) if fi.open else None,
+            "day_high": round(fi.day_high, 2) if fi.day_high else None,
+            "day_low": round(fi.day_low, 2) if fi.day_low else None,
+            "prev_close": round(fi.previous_close, 2),
+            "year_high": round(fi.year_high, 2) if fi.year_high else None,
+            "year_low": round(fi.year_low, 2) if fi.year_low else None,
+            "volume": int(fi.last_volume) if fi.last_volume else None,
+            "avg_volume": int(fi.three_month_average_volume) if fi.three_month_average_volume else None,
+            "market_cap": int(fi.market_cap) if fi.market_cap else None,
+            "year_change_pct": round(fi.year_change * 100, 2) if fi.year_change else None,
+        }
+        _live_cache[cache_key] = {"ts": now, "data": data}
+        return jsonify(data)
+    except Exception as exc:
+        app.logger.error(f"Live quote error for {sym}: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/stock/<symbol>/intraday")
+def api_stock_intraday(symbol: str):
+    """Intraday price history (1-min intervals, last 1 day)."""
+    sym = symbol.upper()
+    cache_key = f"intraday_{sym}"
+    now = _time.time()
+    if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
+        return jsonify(_live_cache[cache_key]["data"])
+    try:
+        import yfinance as yf
+        df = yf.download(_yf_sym(sym), period="1d", interval="5m",
+                         progress=False, auto_adjust=True)
+        if df.empty:
+            return jsonify([])
+        records = []
+        for ts, row in df.iterrows():
+            try:
+                close_val = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
+                vol_val   = int(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else int(row["Volume"])
+                records.append({"t": ts.strftime("%H:%M"), "c": round(close_val, 2), "v": vol_val})
+            except Exception:
+                continue
+        _live_cache[cache_key] = {"ts": now, "data": records}
+        return jsonify(records)
+    except Exception as exc:
+        app.logger.error(f"Intraday error for {sym}: {exc}")
+        return jsonify([])
+
+
+@app.route("/api/stocks/movers")
+def api_stocks_movers():
+    """Top gainers & losers from Nifty 50 (5-min cache)."""
+    now = _time.time()
+    if "movers" in _live_cache and now - _live_cache["movers"]["ts"] < _MOVERS_CACHE_SECS:
+        return jsonify(_live_cache["movers"]["data"])
+    try:
+        import yfinance as yf
+        symbols = NIFTY50_SYMBOLS[:35]
+        yf_syms = [_yf_sym(s) for s in symbols]
+        df = yf.download(yf_syms, period="2d", interval="1d",
+                         progress=False, auto_adjust=True)
+        close = df.get("Close", df)
+        results = []
+        for sym, yfs in zip(symbols, yf_syms):
+            try:
+                col = close[yfs] if yfs in close.columns else None
+                if col is None:
+                    col = close[sym] if sym in close.columns else None
+                if col is None:
+                    continue
+                vals = col.dropna().values
+                if len(vals) < 2:
+                    continue
+                prev_p, last_p = float(vals[-2]), float(vals[-1])
+                chg_pct = (last_p - prev_p) / prev_p * 100 if prev_p else 0
+                results.append({
+                    "symbol": sym, "price": round(last_p, 2),
+                    "change_pct": round(chg_pct, 2), "change": round(last_p - prev_p, 2),
+                })
+            except Exception:
+                continue
+        results.sort(key=lambda x: x["change_pct"], reverse=True)
+        gainers = [r for r in results if r["change_pct"] > 0][:8]
+        losers  = sorted([r for r in results if r["change_pct"] < 0],
+                         key=lambda x: x["change_pct"])[:8]
+        data = {"gainers": gainers, "losers": losers}
+        _live_cache["movers"] = {"ts": now, "data": data}
+        return jsonify(data)
+    except Exception as exc:
+        app.logger.error(f"Movers error: {exc}")
+        return jsonify({"gainers": [], "losers": [], "error": str(exc)})
+
+
+@app.route("/api/stocks/trending")
+def api_stocks_trending():
+    """Most active stocks based on DB signals + news (no external call)."""
+    db = get_db()
+    signals = db.get_latest_signals(50)
+    from collections import Counter
+    sym_counts = Counter(s["symbol"] for s in signals)
+    sig_map = {s["symbol"]: s for s in signals}
+    trending = []
+    for sym, cnt in sym_counts.most_common(20):
+        sig = sig_map.get(sym, {})
+        trending.append({
+            "symbol": sym, "signal_count": cnt,
+            "signal_type": sig.get("signal_type", "HOLD"),
+            "confidence": sig.get("confidence", 0),
+            "risk_level": sig.get("risk_level", ""),
+            "signal_date": sig.get("signal_date", ""),
+        })
+    return jsonify(trending)
+
+
+@app.route("/api/stocks/sector-leaders")
+def api_sector_leaders():
+    """Best BUY signal per sector from DB."""
+    db = get_db()
+    signals = db.get_latest_signals(100)
+    sector_map = {}
+    for sector, tickers in _NSE_STOCK_CATALOG.items():
+        tset = set(tickers)
+        sector_signals = [s for s in signals if s["symbol"] in tset and s.get("signal_type") == "BUY"]
+        sector_signals.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+        if sector_signals:
+            best = sector_signals[0]
+            sector_map[sector] = {
+                "symbol": best["symbol"], "signal_type": best["signal_type"],
+                "confidence": best.get("confidence", 0), "sector": sector,
+                "risk_level": best.get("risk_level", ""),
+            }
+    return jsonify(list(sector_map.values()))
+
+
+@app.route("/api/stocks/presets")
+def api_stocks_presets():
+    """Dynamic presets: AI-derived from DB signals + sector presets."""
+    db = get_db()
+    signals = db.get_latest_signals(50)
+    recent = list({s["symbol"] for s in signals[:10]})[:6]
+    buys  = [s["symbol"] for s in signals if s.get("signal_type") == "BUY"][:6]
+    presets = [
+        {"label": "IT Leaders",   "stocks": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"]},
+        {"label": "Banking",      "stocks": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK"]},
+        {"label": "Energy",       "stocks": ["RELIANCE", "ONGC", "NTPC", "TATAPOWER", "ADANIGREEN"]},
+        {"label": "Nifty Mix",    "stocks": ["TCS", "INFY", "HDFCBANK", "RELIANCE", "TITAN", "ITC"]},
+        {"label": "Pharma",       "stocks": ["SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB", "AUROPHARMA"]},
+    ]
+    if buys:
+        presets.insert(0, {"label": "🤖 AI Buys", "stocks": buys})
+    if recent:
+        presets.insert(0, {"label": "⏱ Recent", "stocks": recent})
+    return jsonify(presets)
 
 
 # ── Static chart serving ───────────────────────────────────────────────────────

@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% block title %}Market Explorer – MarketMind AI{% endblock %}
+
+{% block content %}
+
+<!-- ── Page Header ── -->
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-bar-chart-line text-accent me-2"></i>Market Explorer</h4>
+    <div class="text-muted small mt-1">Live NSE data · Top movers · AI signals · Sector leaders</div>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <!-- Live indices strip -->
+    <div id="indicesStrip" class="d-flex gap-3"></div>
+    <span id="moverLastUpdate" class="text-muted" style="font-size:11px"></span>
+    <button class="mm-btn-outline-sm" onclick="refreshMovers()" id="refreshBtn">
+      <i class="bi bi-arrow-clockwise"></i> Refresh
+    </button>
+  </div>
+</div>
+
+<!-- ── Search bar ── -->
+<div class="position-relative mb-4">
+  <i class="bi bi-search" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:15px"></i>
+  <input id="stockSearchGlobal" type="text" class="form-control mm-search-input"
+         style="padding-left:40px;font-size:14px;border-radius:10px"
+         placeholder="Search NSE stocks by symbol or name…"
+         oninput="handleGlobalSearch(this.value)">
+  <div id="searchDropdown" class="mm-search-dropdown" style="display:none"></div>
+</div>
+
+<!-- ── Tab Navigation ── -->
+<ul class="nav mm-explorer-tabs mb-3" id="explorerTabs">
+  <li class="nav-item">
+    <button class="mm-explorer-tab active" onclick="showTab('gainers', this)">
+      <i class="bi bi-graph-up-arrow me-1" style="color:#22c55e"></i>Top Gainers
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="mm-explorer-tab" onclick="showTab('losers', this)">
+      <i class="bi bi-graph-down-arrow me-1" style="color:#f87171"></i>Top Losers
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="mm-explorer-tab" onclick="showTab('trending', this)">
+      <i class="bi bi-fire me-1" style="color:#fb923c"></i>Trending
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="mm-explorer-tab" onclick="showTab('sectors', this)">
+      <i class="bi bi-grid-3x3-gap me-1" style="color:#818cf8"></i>Sector Leaders
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="mm-explorer-tab" onclick="showTab('recent', this)">
+      <i class="bi bi-clock-history me-1" style="color:#94a3b8"></i>Recently Analyzed
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="mm-explorer-tab" onclick="showTab('browse', this)">
+      <i class="bi bi-list-ul me-1" style="color:#38bdf8"></i>Browse All
+    </button>
+  </li>
+</ul>
+
+<!-- ── Tab Panels ── -->
+
+<!-- Top Gainers -->
+<div id="tab-gainers" class="mm-tab-panel">
+  <div id="gainersGrid" class="mm-mover-grid">
+    <div class="text-center py-5 text-muted">
+      <span class="spinner-border spinner-border-sm me-2"></span>Loading live data…
+    </div>
+  </div>
+</div>
+
+<!-- Top Losers -->
+<div id="tab-losers" class="mm-tab-panel" style="display:none">
+  <div id="losersGrid" class="mm-mover-grid">
+    <div class="text-center py-5 text-muted">
+      <span class="spinner-border spinner-border-sm me-2"></span>Loading live data…
+    </div>
+  </div>
+</div>
+
+<!-- Trending (AI activity) -->
+<div id="tab-trending" class="mm-tab-panel" style="display:none">
+  <p class="text-muted small mb-3"><i class="bi bi-info-circle me-1"></i>Based on AI signal activity in your pipeline</p>
+  <div id="trendingList" class="mm-stock-table-wrap">
+    <div class="text-center py-5 text-muted">
+      <span class="spinner-border spinner-border-sm me-2"></span>Loading…
+    </div>
+  </div>
+</div>
+
+<!-- Sector Leaders -->
+<div id="tab-sectors" class="mm-tab-panel" style="display:none">
+  <p class="text-muted small mb-3"><i class="bi bi-info-circle me-1"></i>Top AI BUY signal per sector from latest pipeline run</p>
+  <div id="sectorsGrid" class="mm-mover-grid">
+    <div class="text-center py-5 text-muted">
+      <span class="spinner-border spinner-border-sm me-2"></span>Loading…
+    </div>
+  </div>
+</div>
+
+<!-- Recently Analyzed -->
+<div id="tab-recent" class="mm-tab-panel" style="display:none">
+  <p class="text-muted small mb-3"><i class="bi bi-info-circle me-1"></i>Stocks processed in your last pipeline run</p>
+  <div id="recentList" class="mm-stock-table-wrap">
+    {% if recently_analyzed %}
+    <table class="mm-data-table">
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Signal</th><th>Confidence</th><th>Risk</th><th>Date</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in recently_analyzed %}
+        <tr class="mm-table-row" onclick="window.location='/stock/{{ s.symbol }}'">
+          <td><a href="/stock/{{ s.symbol }}" class="mm-sym-link" onclick="event.stopPropagation()">{{ s.symbol }}</a></td>
+          <td>
+            {% if s.signal_type == 'BUY' %}<span class="sig-buy">📈 BUY</span>
+            {% elif s.signal_type == 'SELL' %}<span class="sig-sell">📉 SELL</span>
+            {% else %}<span class="sig-hold">⏸ HOLD</span>{% endif %}
+          </td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="mm-conf-bar-wrap"><div class="mm-conf-bar{% if s.signal_type == 'BUY' %} buy{% elif s.signal_type == 'SELL' %} sell{% endif %}" style="width:{{ "%.0f"|format(s.confidence * 100) }}%"></div></div>
+              <span style="font-size:12px">{{ "%.0f"|format(s.confidence * 100) }}%</span>
+            </div>
+          </td>
+          <td><span class="text-muted small">{{ s.risk_level }}</span></td>
+          <td><span class="text-muted" style="font-size:11px">{{ s.signal_date[:16] if s.signal_date else '-' }}</span></td>
+          <td><a href="/stock/{{ s.symbol }}" class="mm-btn-outline-sm" style="font-size:11px;padding:2px 8px">View →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <i class="bi bi-clock-history"></i>
+      No analysis runs yet. <button class="mm-btn-primary mt-2" onclick="openRunModal()">Run Analysis</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Browse All -->
+<div id="tab-browse" class="mm-tab-panel" style="display:none">
+  <div class="d-flex gap-2 mb-3 flex-wrap" id="browseSectorTabs">
+    <button class="mm-sector-tab active" onclick="browseSector('all', this)">All</button>
+  </div>
+  <div id="browseGrid" class="mm-chip-grid">
+    <div class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Data & State ──────────────────────────────────────────────────────────────
+let moversLoaded = false;
+let trendingLoaded = false;
+let sectorsLoaded = false;
+let browseData = {};
+let browseSectorActive = 'all';
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function showTab(name, btn) {
+  document.querySelectorAll('.mm-tab-panel').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.mm-explorer-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).style.display = '';
+  btn.classList.add('active');
+
+  if ((name === 'gainers' || name === 'losers') && !moversLoaded) loadMovers();
+  if (name === 'trending' && !trendingLoaded) loadTrending();
+  if (name === 'sectors' && !sectorsLoaded) loadSectors();
+  if (name === 'browse' && Object.keys(browseData).length === 0) loadBrowse();
+}
+
+// ── Indices Strip ─────────────────────────────────────────────────────────────
+async function loadIndices() {
+  // Load Nifty50 & Sensex proxies via yfinance tickers
+  const indices = [
+    { sym: '^NSEI',   label: 'NIFTY 50' },
+    { sym: '^BSESN',  label: 'SENSEX' },
+  ];
+  for (const idx of indices) {
+    try {
+      const r = await fetch(`/api/stock/${encodeURIComponent(idx.sym)}/live`);
+      const d = await r.json();
+      if (d.price) {
+        const sign  = d.change >= 0 ? '+' : '';
+        const color = d.change >= 0 ? '#22c55e' : '#f87171';
+        const el = document.createElement('div');
+        el.className = 'mm-index-badge';
+        el.innerHTML = `<span class="mm-index-name">${idx.label}</span>
+          <span class="mm-index-price" style="color:${color}">
+            ${d.price.toLocaleString('en-IN')}
+            <small>${sign}${d.change_pct.toFixed(2)}%</small>
+          </span>`;
+        document.getElementById('indicesStrip').appendChild(el);
+      }
+    } catch {}
+  }
+}
+
+// ── Movers ────────────────────────────────────────────────────────────────────
+async function loadMovers() {
+  moversLoaded = true;
+  document.getElementById('refreshBtn').disabled = true;
+  document.getElementById('refreshBtn').innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  try {
+    const r  = await fetch('/api/stocks/movers');
+    const d  = await r.json();
+    renderMoverGrid('gainersGrid', d.gainers || [], true);
+    renderMoverGrid('losersGrid',  d.losers  || [], false);
+    document.getElementById('moverLastUpdate').textContent =
+      'Updated ' + new Date().toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
+  } catch(e) {
+    document.getElementById('gainersGrid').innerHTML =
+      '<div class="text-center text-muted py-4">Failed to load live data</div>';
+  } finally {
+    document.getElementById('refreshBtn').disabled = false;
+    document.getElementById('refreshBtn').innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refresh';
+  }
+}
+
+function renderMoverGrid(containerId, stocks, isGainer) {
+  const el = document.getElementById(containerId);
+  if (!stocks.length) {
+    el.innerHTML = '<div class="text-center text-muted py-4">No data available</div>';
+    return;
+  }
+  el.innerHTML = stocks.map(s => {
+    const sign  = s.change_pct >= 0 ? '+' : '';
+    const color = s.change_pct >= 0 ? '#22c55e' : '#f87171';
+    const icon  = s.change_pct >= 0 ? 'graph-up-arrow' : 'graph-down-arrow';
+    return `
+    <a href="/stock/${s.symbol}" class="mm-mover-card text-decoration-none">
+      <div class="mm-mover-top">
+        <span class="mm-mover-sym">${s.symbol}</span>
+        <i class="bi bi-${icon}" style="color:${color};font-size:16px"></i>
+      </div>
+      <div class="mm-mover-price">₹${s.price.toLocaleString('en-IN')}</div>
+      <div class="mm-mover-change" style="color:${color}">
+        ${sign}₹${Math.abs(s.change).toFixed(2)}
+        &nbsp;(${sign}${s.change_pct.toFixed(2)}%)
+      </div>
+    </a>`;
+  }).join('');
+}
+
+function refreshMovers() {
+  moversLoaded = false;
+  loadMovers();
+}
+
+// ── Trending ──────────────────────────────────────────────────────────────────
+async function loadTrending() {
+  trendingLoaded = true;
+  try {
+    const r = await fetch('/api/stocks/trending');
+    const d = await r.json();
+    const el = document.getElementById('trendingList');
+    if (!d.length) {
+      el.innerHTML = '<div class="empty-state"><i class="bi bi-fire"></i>No signals yet. Run the AI pipeline first.</div>';
+      return;
+    }
+    el.innerHTML = `
+    <table class="mm-data-table">
+      <thead><tr><th>#</th><th>Symbol</th><th>AI Signal</th><th>Confidence</th><th>Risk</th><th>Activity</th><th></th></tr></thead>
+      <tbody>${d.map((s, i) => {
+        const sigClass = s.signal_type === 'BUY' ? 'sig-buy' : s.signal_type === 'SELL' ? 'sig-sell' : 'sig-hold';
+        const sigIcon  = s.signal_type === 'BUY' ? '📈' : s.signal_type === 'SELL' ? '📉' : '⏸';
+        const conf     = Math.round(s.confidence * 100);
+        const barClass = s.signal_type === 'BUY' ? 'buy' : s.signal_type === 'SELL' ? 'sell' : '';
+        return `<tr class="mm-table-row" onclick="window.location='/stock/${s.symbol}'">
+          <td class="text-muted small">${i + 1}</td>
+          <td><a href="/stock/${s.symbol}" class="mm-sym-link" onclick="event.stopPropagation()">${s.symbol}</a></td>
+          <td><span class="${sigClass}">${sigIcon} ${s.signal_type}</span></td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="mm-conf-bar-wrap"><div class="mm-conf-bar ${barClass}" style="width:${conf}%"></div></div>
+              <span style="font-size:12px">${conf}%</span>
+            </div>
+          </td>
+          <td><span class="text-muted small">${s.risk_level || '—'}</span></td>
+          <td>
+            <div class="mm-activity-dots">
+              ${Array.from({length: Math.min(s.signal_count, 5)}).map(() =>
+                '<div class="mm-dot active"></div>').join('')}
+              ${Array.from({length: Math.max(0, 5 - s.signal_count)}).map(() =>
+                '<div class="mm-dot"></div>').join('')}
+            </div>
+          </td>
+          <td><a href="/stock/${s.symbol}" class="mm-btn-outline-sm" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation()">View →</a></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  } catch {
+    document.getElementById('trendingList').innerHTML =
+      '<div class="empty-state"><i class="bi bi-exclamation-triangle"></i>Failed to load trending data.</div>';
+  }
+}
+
+// ── Sector Leaders ────────────────────────────────────────────────────────────
+async function loadSectors() {
+  sectorsLoaded = true;
+  try {
+    const r = await fetch('/api/stocks/sector-leaders');
+    const d = await r.json();
+    const el = document.getElementById('sectorsGrid');
+    if (!d.length) {
+      el.innerHTML = '<div class="empty-state"><i class="bi bi-grid-3x3-gap"></i>Run AI pipeline to see sector leaders.</div>';
+      return;
+    }
+    el.innerHTML = d.map(s => `
+      <a href="/stock/${s.symbol}" class="mm-sector-card text-decoration-none">
+        <div class="mm-sector-card-header">${s.sector}</div>
+        <div class="mm-sector-sym">${s.symbol}</div>
+        <div class="mt-1"><span class="sig-buy">📈 BUY</span></div>
+        <div class="mm-conf-pill">${Math.round(s.confidence * 100)}% conf</div>
+        <div class="text-muted" style="font-size:11px;margin-top:4px">${s.risk_level || ''}</div>
+      </a>`).join('');
+  } catch {
+    document.getElementById('sectorsGrid').innerHTML =
+      '<div class="empty-state text-muted">Failed to load sector data.</div>';
+  }
+}
+
+// ── Browse All ────────────────────────────────────────────────────────────────
+async function loadBrowse() {
+  try {
+    const r = await fetch('/api/stocks/live');
+    const d = await r.json();
+    browseData = d.catalog || d;
+    buildBrowseSectorTabs();
+    renderBrowseGrid('all');
+  } catch {
+    try {
+      const r2 = await fetch('/api/stocks');
+      browseData = await r2.json();
+      buildBrowseSectorTabs();
+      renderBrowseGrid('all');
+    } catch {}
+  }
+}
+
+function buildBrowseSectorTabs() {
+  const cont = document.getElementById('browseSectorTabs');
+  cont.innerHTML = '<button class="mm-sector-tab active" onclick="browseSector(\'all\', this)">All</button>';
+  for (const sector of Object.keys(browseData)) {
+    const btn = document.createElement('button');
+    btn.className = 'mm-sector-tab';
+    btn.textContent = sector;
+    btn.onclick = function() { browseSector(sector, this); };
+    cont.appendChild(btn);
+  }
+}
+
+function browseSector(sector, btn) {
+  browseSectorActive = sector;
+  document.querySelectorAll('#browseSectorTabs .mm-sector-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderBrowseGrid(sector);
+}
+
+function renderBrowseGrid(sector) {
+  const grid = document.getElementById('browseGrid');
+  let stocks = [];
+  if (sector === 'all') {
+    for (const [sec, items] of Object.entries(browseData)) {
+      stocks = stocks.concat((items || []).map(item =>
+        typeof item === 'string' ? { symbol: item, name: item, sector: sec }
+                                 : { ...item, sector: sec }
+      ));
+    }
+  } else {
+    const items = browseData[sector] || [];
+    stocks = items.map(item =>
+      typeof item === 'string' ? { symbol: item, name: item, sector }
+                               : { ...item, sector }
+    );
+  }
+  grid.innerHTML = stocks.map(s => `
+    <a href="/stock/${s.symbol}" class="mm-browse-chip text-decoration-none" title="${s.name || s.symbol}">
+      <div class="mm-browse-sym">${s.symbol}</div>
+      ${s.name && s.name !== s.symbol ? `<div class="mm-browse-name">${s.name.slice(0,18)}${s.name.length>18?'…':''}</div>` : ''}
+    </a>`).join('');
+}
+
+// ── Global Search ─────────────────────────────────────────────────────────────
+let _searchTimeout = null;
+async function handleGlobalSearch(val) {
+  const drop = document.getElementById('searchDropdown');
+  clearTimeout(_searchTimeout);
+  if (!val.trim()) { drop.style.display = 'none'; return; }
+  _searchTimeout = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/stocks/live?search=${encodeURIComponent(val)}`);
+      const d = await r.json();
+      const results = Array.isArray(d) ? d : [];
+      if (!results.length) { drop.style.display = 'none'; return; }
+      drop.innerHTML = results.slice(0, 10).map(s => `
+        <a href="/stock/${s.symbol}" class="mm-search-result">
+          <span class="fw-semibold">${s.symbol}</span>
+          <span class="text-muted small ms-2">${s.name || ''}</span>
+        </a>`).join('');
+      drop.style.display = '';
+    } catch { drop.style.display = 'none'; }
+  }, 300);
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#stockSearchGlobal') && !e.target.closest('#searchDropdown'))
+    document.getElementById('searchDropdown').style.display = 'none';
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadIndices();
+  loadMovers(); // pre-load default tab
+});
+</script>
+{% endblock %}

@@ -82,7 +82,7 @@
                 </div>
               </td>
               <td><span style="font-size:12px;color:var(--text-muted)">{{ s.risk_level }}</span></td>
-              <td style="font-size:11px;color:var(--text-muted)">{{ s.signal_date[:10] if s.signal_date else '-' }}</td>
+              <td style="font-size:11px;color:var(--text-muted)">{{ s.signal_date[:16] if s.signal_date else '-' }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -149,6 +149,34 @@
   </div>
 </div>
 
+<!-- AI News Insights — stock suggestions from latest news -->
+<div class="row g-3 mb-3">
+  <div class="col-12">
+    <div class="mm-card">
+      <div class="mm-card-header">
+        <span><i class="bi bi-stars"></i> AI News Insights — Stock Suggestions</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-muted" style="font-size:11px" id="suggCacheNote"></span>
+          <button class="mm-btn-primary" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()" id="suggBtn">
+            <i class="bi bi-magic me-1"></i>Refresh
+          </button>
+        </div>
+      </div>
+      <div class="mm-card-body p0" id="suggBody" style="min-height:64px;">
+        <div class="empty-state" id="suggEmpty" style="padding:24px 20px;display:none">
+          <i class="bi bi-stars"></i>
+          Click "Refresh" to re-run AI analysis on latest headlines.
+        </div>
+        <div id="suggLoading" style="display:none;padding:28px;text-align:center">
+          <span class="spinner-border spinner-border-sm me-2 text-accent"></span>
+          <span class="text-muted">Gemini is reading today's news…</span>
+        </div>
+        <div id="suggList" style="display:none;overflow-y:auto;max-height:320px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Charts row -->
 <div class="row g-3">
   <div class="col-12 col-md-5">
@@ -196,34 +224,38 @@
 
 {% block scripts %}
 <script>
-// Signal doughnut chart
-fetch('/api/signals?limit=200')
-  .then(r => r.json())
-  .then(data => {
-    const counts = {BUY:0, SELL:0, HOLD:0};
-    data.forEach(s => { if (counts[s.signal_type] !== undefined) counts[s.signal_type]++; });
-    const canvas = document.getElementById('signalDistChart');
-    new Chart(canvas, {
-      type: 'doughnut',
-      data: {
-        labels: ['BUY', 'SELL', 'HOLD'],
-        datasets: [{
-          data: [counts.BUY, counts.SELL, counts.HOLD],
-          backgroundColor: ['#22c55e','#f87171','#fbbf24'],
-          borderWidth: 0,
-        }]
-      },
-      options: {
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: { color: '#94a3b8', padding: 14, font: {size: 12} }
-          }
+// Signal doughnut chart — built from server-side data (same source as table)
+(function() {
+  const _allSignals = {{ signals_all | tojson }};
+  const counts = {BUY:0, SELL:0, HOLD:0};
+  _allSignals.forEach(s => { if (counts[s.signal_type] !== undefined) counts[s.signal_type]++; });
+  const canvas = document.getElementById('signalDistChart');
+  new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels: ['BUY', 'SELL', 'HOLD'],
+      datasets: [{
+        data: [counts.BUY, counts.SELL, counts.HOLD],
+        backgroundColor: ['#22c55e','#f87171','#fbbf24'],
+        borderWidth: 0,
+      }]
+    },
+    options: {
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: '#94a3b8', padding: 14, font: {size: 12} }
         },
-        cutout: '65%',
-      }
-    });
-  }).catch(() => {});
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${ctx.parsed} signal${ctx.parsed!==1?'s':''}`
+          }
+        }
+      },
+      cutout: '65%',
+    }
+  });
+})();
 
 // News tab switching
 let globalNewsLoaded = false;
@@ -266,5 +298,106 @@ function loadGlobalNews() {
       document.getElementById('globalNewsLoading').innerHTML = '<span class="text-muted small">Failed to load global news</span>';
     });
 }
+
+function loadSuggestions(isAutoLoad) {
+  document.getElementById('suggEmpty').style.display   = 'none';
+  document.getElementById('suggLoading').style.display = 'block';
+  document.getElementById('suggList').style.display    = 'none';
+  document.getElementById('suggBtn').disabled = true;
+  document.getElementById('suggCacheNote').textContent = '';
+
+  fetch('/api/news/suggestions', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('suggLoading').style.display = 'none';
+      document.getElementById('suggBtn').disabled = false;
+
+      // Gemini overloaded (503) or explicit error
+      if (data.error) {
+        const is503 = data.error.toLowerCase().includes('503') ||
+                      data.error.toLowerCase().includes('high demand') ||
+                      data.error.toLowerCase().includes('unavailable');
+        const emptyEl = document.getElementById('suggEmpty');
+        emptyEl.style.display = 'block';
+        if (is503) {
+          emptyEl.innerHTML =
+            `<i class="bi bi-hourglass-split" style="color:var(--accent)"></i>
+             <div class="mt-2 fw-semibold" style="font-size:13px">Gemini is busy right now</div>
+             <div class="text-muted mt-1" style="font-size:12px">High demand on the AI model. Auto-retrying in 30s…</div>
+             <button class="mm-btn-primary mt-3" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()">
+               <i class="bi bi-arrow-clockwise me-1"></i>Retry Now
+             </button>`;
+          // Auto-retry after 30s if this was an auto-load call
+          if (isAutoLoad !== false) {
+            setTimeout(() => loadSuggestions(false), 30000);
+          }
+        } else {
+          emptyEl.innerHTML =
+            `<i class="bi bi-exclamation-triangle"></i>
+             <div class="mt-2" style="font-size:12px">${data.error}</div>
+             <button class="mm-btn-primary mt-2" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()">
+               <i class="bi bi-arrow-clockwise me-1"></i>Retry
+             </button>`;
+        }
+        return;
+      }
+
+      if (data.cached) {
+        document.getElementById('suggCacheNote').textContent = '(cached · refreshes in 15 min)';
+      }
+      const items = data.suggestions || [];
+      if (!items.length) {
+        document.getElementById('suggEmpty').style.display = 'block';
+        document.getElementById('suggEmpty').innerHTML =
+          '<i class="bi bi-stars"></i> No clear stock suggestions from current news.';
+        return;
+      }
+      const list = document.getElementById('suggList');
+      const actionClass = a => a==='BUY'?'sig-buy':a==='SELL'?'sig-sell':'sig-hold';
+      const actionIcon  = a => a==='BUY'?'📈':a==='SELL'?'📉':a==='WATCH'?'👁':'⏸';
+      list.innerHTML = `
+        <table class="mm-table">
+          <thead>
+            <tr><th>Symbol</th><th>Action</th><th>Sector</th><th>Reason</th><th>Confidence</th></tr>
+          </thead>
+          <tbody>
+            ${items.map(s => `
+              <tr onclick="location.href='/stock/${s.symbol}'" style="cursor:pointer">
+                <td><strong>${s.symbol}</strong></td>
+                <td><span class="${actionClass(s.action)}">${actionIcon(s.action)} ${s.action}</span></td>
+                <td style="font-size:11px;color:var(--text-muted)">${s.sector||'—'}</td>
+                <td style="font-size:12px;color:var(--text-dim)">${(s.reason||'').slice(0,120)}${s.reason&&s.reason.length>120?'…':''}</td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <div style="width:44px;height:5px;background:var(--bg-surface);border-radius:99px;overflow:hidden">
+                      <div style="width:${s.confidence||50}%;height:100%;background:var(--accent);border-radius:99px"></div>
+                    </div>
+                    <span style="font-size:11px;color:var(--text-muted)">${s.confidence||'—'}%</span>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      list.style.display = 'block';
+    })
+    .catch(() => {
+      document.getElementById('suggLoading').style.display = 'none';
+      document.getElementById('suggBtn').disabled = false;
+      const emptyEl = document.getElementById('suggEmpty');
+      emptyEl.style.display = 'block';
+      emptyEl.innerHTML =
+        `<i class="bi bi-wifi-off"></i>
+         <div class="mt-2" style="font-size:12px">Network error — check connection</div>
+         <button class="mm-btn-primary mt-2" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()">
+           <i class="bi bi-arrow-clockwise me-1"></i>Retry
+         </button>`;
+    });
+}
+
+// Auto-load AI news suggestions on page load (marked as auto so 503 triggers retry)
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => loadSuggestions(true), 1500);
+});
 </script>
 {% endblock %}
