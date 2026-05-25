@@ -550,7 +550,9 @@ def api_news_suggestions():
         return jsonify({"suggestions": _news_suggestions_cache["data"], "cached": True})
 
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not gemini_key:
+    # Only hard-require Gemini key when using Gemini; Claude/OpenAI are checked inside the try block
+    llm_provider_check = os.getenv("LLM_PROVIDER", "claude").lower().strip()
+    if llm_provider_check == "gemini" and not gemini_key:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
 
     db = get_db()
@@ -592,34 +594,69 @@ def api_news_suggestions():
 
     try:
         import re, json as _json, time as _t
-        from google import genai as google_genai
-        client = google_genai.Client(api_key=gemini_key)
-        model  = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-        # Retry up to 3 times on 503 / overload with exponential backoff
-        last_exc = None
-        for attempt in range(3):
-            try:
-                response = client.models.generate_content(model=model, contents=prompt)
-                break
-            except Exception as e:
-                last_exc = e
-                err_str = str(e).lower()
-                is_overload = ("503" in err_str or "unavailable" in err_str or
-                               "high demand" in err_str or "overloaded" in err_str)
-                if is_overload and attempt < 2:
-                    wait = 4 * (2 ** attempt)   # 4s, 8s
-                    app.logger.warning(f"Gemini 503 on attempt {attempt+1}, retrying in {wait}s")
-                    _t.sleep(wait)
-                    continue
-                raise
-        else:
-            raise last_exc
+        llm_provider = os.getenv("LLM_PROVIDER", "claude").lower().strip()
+        raw = ""
 
-        raw = response.text or ""
+        if llm_provider == "claude":
+            import anthropic as _anthropic
+            claude_key = os.getenv("CLAUDE_API_KEY", "").strip()
+            if not claude_key:
+                return jsonify({"error": "CLAUDE_API_KEY not configured"}), 503
+            claude_model = os.getenv("CLAUDE_MODEL", "claude-opus-4-5")
+            client = _anthropic.Anthropic(api_key=claude_key)
+            resp = client.messages.create(
+                model=claude_model,
+                max_tokens=2048,
+                system="You are an expert Indian stock market analyst. Return only valid JSON arrays.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = resp.content[0].text.strip()
 
-        # Parse JSON from response
-        raw = raw.strip()
+        elif llm_provider == "openai":
+            from openai import OpenAI as _OpenAI
+            oai_key = os.getenv("OPENAI_API_KEY", "").strip()
+            if not oai_key:
+                return jsonify({"error": "OPENAI_API_KEY not configured"}), 503
+            oai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            client = _OpenAI(api_key=oai_key)
+            resp = client.chat.completions.create(
+                model=oai_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert Indian stock market analyst. Return only valid JSON arrays."},
+                    {"role": "user",   "content": prompt},
+                ],
+                temperature=0.2, max_tokens=2048,
+            )
+            raw = resp.choices[0].message.content.strip()
+
+        else:  # gemini (default)
+            if not gemini_key:
+                return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
+            from google import genai as google_genai
+            gclient = google_genai.Client(api_key=gemini_key)
+            gmodel  = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            last_exc = None
+            for attempt in range(3):
+                try:
+                    response = gclient.models.generate_content(model=gmodel, contents=prompt)
+                    raw = response.text or ""
+                    break
+                except Exception as e:
+                    last_exc = e
+                    err_str = str(e).lower()
+                    is_overload = ("503" in err_str or "unavailable" in err_str or
+                                   "high demand" in err_str or "overloaded" in err_str)
+                    if is_overload and attempt < 2:
+                        wait = 4 * (2 ** attempt)
+                        app.logger.warning(f"Gemini 503 on attempt {attempt+1}, retrying in {wait}s")
+                        _t.sleep(wait)
+                        continue
+                    raise
+            else:
+                raise last_exc
+
+        # Parse JSON from whichever provider responded
         m = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", raw)
         if m:
             raw = m.group(1)
@@ -631,7 +668,7 @@ def api_news_suggestions():
 
         _news_suggestions_cache["ts"]   = now
         _news_suggestions_cache["data"] = suggestions
-        return jsonify({"suggestions": suggestions, "cached": False})
+        return jsonify({"suggestions": suggestions, "cached": False, "provider": llm_provider})
 
     except Exception as exc:
         err_str = str(exc).lower()
@@ -798,15 +835,25 @@ def api_stocks_movers():
         import yfinance as yf
         symbols = NIFTY50_SYMBOLS[:35]
         yf_syms = [_yf_sym(s) for s in symbols]
-        df = yf.download(yf_syms, period="2d", interval="1d",
+        # Use 5d so weekends/holidays never leave us with < 2 trading days
+        df = yf.download(yf_syms, period="5d", interval="1d",
                          progress=False, auto_adjust=True)
-        close = df.get("Close", df)
+        # yfinance returns a MultiIndex (Price, Ticker); slice out Close
+        if hasattr(df.columns, "levels"):
+            try:
+                close = df["Close"]
+            except KeyError:
+                close = df
+        else:
+            close = df.get("Close", df)
         results = []
         for sym, yfs in zip(symbols, yf_syms):
             try:
-                col = close[yfs] if yfs in close.columns else None
-                if col is None:
-                    col = close[sym] if sym in close.columns else None
+                col = None
+                if yfs in close.columns:
+                    col = close[yfs]
+                elif sym in close.columns:
+                    col = close[sym]
                 if col is None:
                     continue
                 vals = col.dropna().values

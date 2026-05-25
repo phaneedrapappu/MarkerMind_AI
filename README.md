@@ -2,10 +2,11 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.0-green)](https://flask.palletsprojects.com)
+[![Claude](https://img.shields.io/badge/AI-Claude%20Opus%204.5-blueviolet)](https://anthropic.com)
 [![Gemini](https://img.shields.io/badge/AI-Gemini%202.5%20Flash-orange)](https://ai.google.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MarketMind AI is an autonomous multi-agent system that monitors Indian stock markets (NSE), generates AI-powered trading signals, delivers rich HTML email digests, and now includes **Phase 2 features**: technical indicators (RSI/MACD/Bollinger Bands), a stock screener, signal backtesting, user authentication, per-user portfolio management, and Telegram alerts — all without manual intervention. It ships with a **mobile-first web dashboard** and a full **CLI**.
+MarketMind AI is an autonomous multi-agent system that monitors Indian stock markets (NSE), generates AI-powered trading signals, delivers rich HTML email digests, and ships a **mobile-first web dashboard** with technical indicators, stock screener, signal backtesting, user authentication, portfolio management, and real-time Telegram alerts — all without manual intervention.
 
 ---
 
@@ -16,7 +17,7 @@ MarketDataAgent       →  NSE API / yfinance fallback
        ↓
   NewsAgent            →  RSS feeds (Google News, ET Markets, Moneycontrol)
        ↓
-AIAnalysisAgent        →  Google Gemini 2.5 Flash (batched per cycle)
+AIAnalysisAgent        →  Claude / Gemini / OpenAI (batched per cycle)
        ↓
 SignalGenerator        →  Rule-based BUY / HOLD / SELL scoring
        ↓
@@ -40,7 +41,7 @@ Flask Dashboard        →  Mobile-first browser UI (auth, portfolio, screener)
 |---|---|
 | Live NSE/yfinance market data | ✅ |
 | RSS news aggregation + sentiment | ✅ |
-| Gemini AI batch analysis | ✅ |
+| **Multi-provider AI — Claude (default), Gemini, OpenAI** | ✅ |
 | BUY / HOLD / SELL signals with confidence % | ✅ |
 | matplotlib report charts (PNG) | ✅ |
 | HTML email digest → multiple recipients | ✅ |
@@ -57,8 +58,8 @@ Flask Dashboard        →  Mobile-first browser UI (auth, portfolio, screener)
 | **Signal backtesting with P&L performance tracking** | ✅ Phase 2 |
 | **User authentication (register / login / logout)** | ✅ Phase 2 |
 | **Per-user portfolio with real-time unrealised P&L** | ✅ Phase 2 |
-| **Per-user watchlist** | ✅ Phase 2 |
-| **Telegram bot alerts** | ✅ Phase 2 |
+| **Per-user watchlist (drives scheduled Telegram alerts)** | ✅ |
+| **Telegram bot alerts via deep-link subscribe flow** | ✅ |
 
 ---
 
@@ -67,8 +68,9 @@ Flask Dashboard        →  Mobile-first browser UI (auth, portfolio, screener)
 ### 1. Prerequisites
 
 - Python 3.10+
-- [Google Gemini API key](https://aistudio.google.com/app/apikey) (free tier works)
+- An AI API key — **Claude** (recommended, Anthropic), Gemini (Google free tier), or OpenAI
 - Gmail account with an [App Password](https://myaccount.google.com/apppasswords) for email alerts
+- A Telegram bot token from [@BotFather](https://t.me/BotFather) *(optional, for mobile alerts)*
 
 ### 2. Install
 
@@ -87,23 +89,36 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```env
-# AI Provider
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
+# ── AI Provider (choose one: claude | gemini | openai) ────────────────────────
+LLM_PROVIDER=claude          # claude is the default
 
-# Email (Gmail SMTP with App Password)
+# Anthropic / Claude (recommended)
+CLAUDE_API_KEY=sk-ant-api03-xxxxxxx
+CLAUDE_MODEL=claude-opus-4-5
+
+# Google Gemini (free tier available)
+# GEMINI_API_KEY=your_gemini_api_key
+# GEMINI_MODEL=gemini-2.5-flash
+
+# OpenAI
+# OPENAI_API_KEY=sk-xxxx
+
+# ── Email (Gmail SMTP with App Password) ─────────────────────────────────────
 SMTP_USER=you@gmail.com
 SMTP_PASSWORD=your_gmail_app_password
 
-# Flask
+# ── Flask ────────────────────────────────────────────────────────────────────
 FLASK_PORT=5050
-FLASK_SECRET_KEY=change_me_to_a_random_string   # required for session security
+FLASK_SECRET_KEY=change_me_to_a_long_random_string
 
-# Telegram (Phase 2 — optional)
+# ── Telegram (optional) ──────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-TELEGRAM_CHAT_ID=your_telegram_chat_id
+# Leave blank for localhost/polling mode.
+# Set to your public URL for webhook mode (production):
+# TELEGRAM_WEBHOOK_URL=https://marketmind.yourdomain.com
 ```
+
+> **Switch AI providers instantly** — just change `LLM_PROVIDER` and restart. No other changes needed.
 
 ### 4. (Optional) Edit `config/config.yaml`
 
@@ -247,59 +262,62 @@ After signing in:
 - **Close positions** — mark as closed at a specified sell price
 - **Delete positions** — remove positions from tracking
 - **Watchlist** — add/remove any NSE symbol; chips link directly to stock detail page
-- **Telegram configuration** — enter your bot token and chat ID, then test with one click
+- **Telegram subscribe** — one-tap deep-link button; no manual chat ID entry
 
 ---
 
 ### Telegram Alerts
 
-MarketMind AI sends a **formatted signal summary** to your Telegram every time the AI pipeline runs — whether triggered manually from the dashboard, via the CLI, or by the automatic 2×/day scheduler.
+MarketMind AI uses a **single shared bot** owned by the app. Users subscribe via a one-tap Telegram deep-link — no manual chat ID entry required.
 
-#### What the Telegram message contains
+#### Subscribe flow (30 seconds)
+
+1. Create your bot: open Telegram → search **@BotFather** → `/newbot` → copy token → add to `.env` as `TELEGRAM_BOT_TOKEN`
+2. Restart the app
+3. Go to **Portfolio page** → scroll to **Telegram Alerts** → click **Subscribe to Alerts**
+4. Telegram opens with the bot pre-selected → press **Start**
+5. Bot replies: *"✅ You're now subscribed to MarketMind AI alerts"*
+6. Portfolio page auto-detects the link and shows **Connected ✅**
+
+#### What the Telegram message looks like
 
 ```
 📊 MarketMind AI Signal Alert
 
-🟢 TCS      →  BUY   (82%)
-🔴 INFY     →  SELL  (71%)
-🟡 HDFCBANK →  HOLD
-🟢 RELIANCE →  BUY   (76%)
-…and 3 more signals in the dashboard.
+🟢 TCS       →  BUY   (82%)
+🔴 INFY      →  SELL  (71%)
+🟡 HDFCBANK  →  HOLD
+🟢 RELIANCE  →  BUY   (76%)
 
 🔗 Open Dashboard
 ```
 
-#### When alerts are sent
+#### Who receives which alerts
 
-| Trigger | Telegram sent? |
+| Run type | Stocks you receive alerts for |
 |---|---|
-| Manual **Run Analysis** from dashboard | ✅ Yes — immediately after pipeline completes |
-| CLI `python3 main.py` | ✅ Yes — via `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` env vars |
-| **8:45 AM IST** automated scheduler | ✅ Yes — after each subscriber digest |
-| **4:15 PM IST** automated scheduler | ✅ Yes — after each subscriber digest |
-| `/api/telegram/test` | ✅ Yes — sends a one-off test message only |
+| **Manual Run Analysis** (dashboard modal) | All stocks you selected |
+| **Scheduled digest (8:45 AM / 4:15 PM IST)** | Only stocks in your personal **Watchlist** |
 
-#### Who receives the alerts
+> Add stocks to your Watchlist on the Portfolio page to personalise your scheduled alert feed. Users with an empty watchlist are skipped gracefully during scheduled runs.
 
-- Any registered user who has saved their bot token + chat ID on the **Portfolio page** and has **alerts enabled**
-- Additionally, the process-level `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `.env` always receives alerts — useful before any user registers, or when running headlessly via CLI / cron
+#### Polling vs Webhook mode
 
-#### Setup (2 minutes)
+| Mode | How it activates | Recommended for |
+|---|---|---|
+| **Polling** (default) | App pulls messages from Telegram every 30 s — starts automatically when `TELEGRAM_WEBHOOK_URL` is blank | Localhost / development |
+| **Webhook** | Telegram pushes updates to your URL instantly | Production server with a public domain |
 
-1. Open Telegram → search **`@BotFather`** → send `/newbot` → copy the **Bot Token**
-2. Start a chat with your new bot (send it any message)
-3. Get your Chat ID — easiest way: message **`@userinfobot`** on Telegram and it replies instantly
-4. Add to your `.env`:
-
+To switch to webhook mode add to `.env`:
 ```env
-TELEGRAM_BOT_TOKEN=1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TELEGRAM_CHAT_ID=123456789
+TELEGRAM_WEBHOOK_URL=https://marketmind.yourdomain.com
 ```
-
-5. Restart the server — alerts will fire automatically from the next pipeline run
-6. Test immediately: go to `/portfolio` → paste token + chat ID → click **Save** → click **Test**
-
-> **Tip:** The bot is free. Your phone number is never in the token or chat ID. If the token is ever compromised, open `@BotFather` → `/revoke` → pick your bot — a new token is issued instantly.
+The app registers the webhook automatically on startup. You can also manage it manually:
+```bash
+python3 setup_telegram_webhook.py set https://marketmind.yourdomain.com
+python3 setup_telegram_webhook.py info    # verify
+python3 setup_telegram_webhook.py delete  # revert to polling
+```
 
 ---
 
@@ -711,8 +729,8 @@ agents:
 
   ai_analysis_agent:
     enabled: true
-    provider: "gemini"           # "gemini" or "openai"
-    model: "gemini-2.5-flash"    # or "gpt-4o-mini" for OpenAI
+    provider: "claude"           # claude | gemini | openai  (overridden by LLM_PROVIDER env var)
+    model: "claude-opus-4-5"    # or gemini-2.5-flash / gpt-4o-mini
 
   signal_generator_agent:
     risk_tolerance: "medium"     # low / medium / high
@@ -764,8 +782,12 @@ scheduler:
 | `DELETE` | `/api/portfolio/delete/<id>` | **Delete a position** |
 | `GET` | `/api/watchlist` | **Get user watchlist** (auth required, JSON) |
 | `POST` | `/api/watchlist/toggle/<symbol>` | **Add or remove symbol from watchlist** |
-| `POST` | `/api/telegram/configure` | **Save Telegram bot token + chat ID** |
+| `GET` | `/api/telegram/status` | Telegram link status for current user |
+| `GET` | `/api/telegram/subscribe-link` | Generate one-time deep-link for bot subscribe |
+| `POST` | `/api/telegram/webhook` | Receive Telegram updates (webhook mode) |
+| `POST` | `/api/telegram/unsubscribe` | Remove Telegram link for current user |
 | `POST` | `/api/telegram/test` | **Send a test Telegram message** |
+| `GET` | `/api/telegram/run-info` | Subscriber count shown in Run Analysis modal |
 | `POST` | `/api/run` | Trigger pipeline; body: `{"stocks":[…], "email":[…]}` |
 | `POST` | `/api/subscribe` | Subscribe or update watchlist; body: `{"email":"…", "stocks":[…]}` |
 | `POST` | `/api/unsubscribe` | Unsubscribe; body: `{"token":"…"}` |

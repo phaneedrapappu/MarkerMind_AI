@@ -1,10 +1,11 @@
 """
-AI Analysis Agent - Analyses market data via LLM (Gemini or OpenAI).
+AI Analysis Agent - Analyses market data via LLM (Gemini, OpenAI, or Claude).
 All stocks are sent in ONE batched prompt to minimise API cost.
 
 Provider selection (via config.yaml or LLM_PROVIDER env var):
   gemini  – Google Gemini (default, free tier available)
   openai  – OpenAI GPT (paid)
+  claude  – Anthropic Claude (paid, highest quality)
 """
 import logging
 import os
@@ -35,10 +36,17 @@ except ImportError:
     OPENAI_AVAILABLE = False
     OpenAI = None
 
+try:
+    import anthropic as anthropic_sdk
+    CLAUDE_AVAILABLE = True
+except ImportError:
+    CLAUDE_AVAILABLE = False
+    anthropic_sdk = None
+
 
 class AIAnalysisAgent(BaseAgent):
     """
-    AI Analysis Agent - Analyzes market data via Gemini (default) or OpenAI.
+    AI Analysis Agent - Analyzes market data via Gemini (default), OpenAI, or Claude.
     Provider and model configurable via config.yaml or environment variables.
     All stocks are analysed in a single batched LLM call to save cost.
     """
@@ -52,7 +60,7 @@ class AIAnalysisAgent(BaseAgent):
         # Read from config first, then env var fallback
         self.llm_provider = (
             config.get("provider", "").strip().lower() or
-            os.getenv("LLM_PROVIDER", "gemini").lower().strip()
+            os.getenv("LLM_PROVIDER", "claude").lower().strip()
         )
 
         # Gemini settings
@@ -71,9 +79,18 @@ class AIAnalysisAgent(BaseAgent):
         )
         self._openai_client = None
 
+        # Claude / Anthropic settings
+        self.claude_api_key = os.getenv("CLAUDE_API_KEY", "").strip()
+        self.claude_model = (
+            config.get("model", "").strip() or
+            os.getenv("CLAUDE_MODEL", "claude-opus-4-5").strip()
+        )
+        self._claude_client = None
+
         # model label shown in logs / DB
         self.model = (
             self.gemini_model_name if self.llm_provider == "gemini"
+            else self.claude_model if self.llm_provider == "claude"
             else self.openai_model
         )
 
@@ -101,8 +118,18 @@ class AIAnalysisAgent(BaseAgent):
                 self._openai_client = OpenAI(api_key=self.openai_api_key)
                 self.logger.info(f"OpenAI client ready – model: {self.openai_model}")
 
+            elif self.llm_provider == "claude":
+                if not CLAUDE_AVAILABLE:
+                    self.logger.error("anthropic package not installed. Run: pip install anthropic")
+                    return False
+                if not self.claude_api_key:
+                    self.logger.error("CLAUDE_API_KEY env var not set.")
+                    return False
+                self._claude_client = anthropic_sdk.Anthropic(api_key=self.claude_api_key)
+                self.logger.info(f"Claude client ready – model: {self.claude_model}")
+
             else:
-                self.logger.error(f"Unknown LLM_PROVIDER '{self.llm_provider}'. Use 'gemini' or 'openai'.")
+                self.logger.error(f"Unknown LLM_PROVIDER '{self.llm_provider}'. Use 'gemini', 'openai', or 'claude'.")
                 return False
 
             return True
@@ -213,6 +240,17 @@ class AIAnalysisAgent(BaseAgent):
                 max_tokens=2000,
             )
             return response.choices[0].message.content.strip()
+
+        elif self.llm_provider == "claude":
+            if not self._claude_client:
+                raise RuntimeError("Claude client not initialised")
+            response = self._claude_client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                system=system_msg,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            return response.content[0].text.strip()
 
         raise ValueError(f"Unknown provider: {self.llm_provider}")
 

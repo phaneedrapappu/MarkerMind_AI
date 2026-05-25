@@ -6,8 +6,9 @@ beautifulsoup4==4.12.3
 pyyaml==6.0.1
 
 # AI/LLM  (select provider via LLM_PROVIDER env var)
-google-genai>=1.0.0          # default – free tier available (new SDK)
-openai>=1.0.0                # optional – paid
+google-genai>=1.0.0          # gemini  – free tier available
+openai>=1.0.0                # openai  – paid
+anthropic>=0.25.0            # claude  – best quality, paid
 
 # Data processing
 pandas==2.2.0
