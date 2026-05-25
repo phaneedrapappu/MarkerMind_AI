@@ -692,4 +692,4 @@ MarketMind AI is an educational / research tool. Nothing it generates constitute
 
 ---
 
-**Built with ❤️ for retail investors and traders**
+**Built for retail investors and traders**
