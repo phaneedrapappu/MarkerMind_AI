@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Stock Screener · MarketMind AI{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-3 px-lg-4" style="padding-top:80px;padding-bottom:80px">
+
+  <div class="mb-4">
+    <h4 class="fw-bold mb-0"><i class="bi bi-funnel text-accent me-2"></i>Stock Screener</h4>
+    <p class="text-muted small">Filter NSE stocks by technical indicator criteria</p>
+  </div>
+
+  <!-- Filter panel -->
+  <div class="mm-card mb-4">
+    <div class="mm-card-header"><i class="bi bi-sliders text-accent me-2"></i>Filters</div>
+    <div class="p-3">
+      <div class="row g-3">
+        <div class="col-md-3 col-6">
+          <label class="form-label small fw-semibold">Sector</label>
+          <select id="fSector" class="form-select mm-input">
+            <option value="">All Sectors</option>
+            <option>IT</option>
+            <option>Banking</option>
+            <option>Finance</option>
+            <option>Auto</option>
+            <option>Pharma</option>
+            <option>FMCG</option>
+            <option>Energy</option>
+            <option>Retail/Consumer</option>
+            <option>Metals</option>
+            <option>Infra/Cement</option>
+          </select>
+        </div>
+        <div class="col-md-2 col-6">
+          <label class="form-label small fw-semibold">Signal</label>
+          <select id="fSignal" class="form-select mm-input">
+            <option value="">Any</option>
+            <option>BUY</option>
+            <option>SELL</option>
+            <option>HOLD</option>
+          </select>
+        </div>
+        <div class="col-md-2 col-6">
+          <label class="form-label small fw-semibold">MACD Trend</label>
+          <select id="fMacd" class="form-select mm-input">
+            <option value="">Any</option>
+            <option value="bullish">Bullish</option>
+            <option value="bearish">Bearish</option>
+            <option value="neutral">Neutral</option>
+          </select>
+        </div>
+        <div class="col-md-2 col-6">
+          <label class="form-label small fw-semibold">RSI Min</label>
+          <input type="number" id="fRsiMin" class="form-control mm-input" value="0" min="0" max="100">
+        </div>
+        <div class="col-md-2 col-6">
+          <label class="form-label small fw-semibold">RSI Max</label>
+          <input type="number" id="fRsiMax" class="form-control mm-input" value="100" min="0" max="100">
+        </div>
+        <div class="col-md-1 col-6 d-flex align-items-end">
+          <button class="mm-btn-primary w-100" onclick="runScreener()" id="screenBtn">
+            <i class="bi bi-search"></i> <span class="d-none d-md-inline">Screen</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick RSI presets -->
+  <div class="d-flex gap-2 flex-wrap mb-3">
+    <span class="text-muted small align-self-center">RSI presets:</span>
+    <button class="mm-preset-btn" onclick="setRsi(0,30)">Oversold (&lt;30)</button>
+    <button class="mm-preset-btn" onclick="setRsi(70,100)">Overbought (&gt;70)</button>
+    <button class="mm-preset-btn" onclick="setRsi(40,60)">Neutral (40-60)</button>
+  </div>
+
+  <!-- Results -->
+  <div class="mm-card">
+    <div class="mm-card-header d-flex align-items-center justify-content-between">
+      <span><i class="bi bi-table text-accent me-2"></i>Results</span>
+      <span id="resultCount" class="mm-badge badge-idle">0 stocks</span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr class="text-muted small">
+            <th>Symbol</th>
+            <th class="text-end">Price (₹)</th>
+            <th class="text-center">Signal</th>
+            <th class="text-end">RSI</th>
+            <th class="text-center">MACD</th>
+            <th class="text-end">BB %B</th>
+            <th class="text-end">MA20 (₹)</th>
+            <th class="text-center">Bullish / Bearish</th>
+            <th class="text-center">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="screenerBody">
+          <tr><td colspan="9" class="text-center text-muted py-5">
+            <i class="bi bi-funnel fs-3 d-block mb-2 opacity-25"></i>
+            Apply filters above and click Screen
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function setRsi(min, max) {
+  document.getElementById('fRsiMin').value = min;
+  document.getElementById('fRsiMax').value = max;
+}
+
+async function runScreener() {
+  const btn = document.getElementById('screenBtn');
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  btn.disabled = true;
+
+  const params = new URLSearchParams({
+    sector: document.getElementById('fSector').value,
+    signal: document.getElementById('fSignal').value,
+    macd_trend: document.getElementById('fMacd').value,
+    rsi_min: document.getElementById('fRsiMin').value,
+    rsi_max: document.getElementById('fRsiMax').value,
+  });
+
+  const resp = await fetch('/api/screener?' + params);
+  const data = await resp.json();
+
+  btn.innerHTML = '<i class="bi bi-search"></i> <span class="d-none d-md-inline">Screen</span>';
+  btn.disabled = false;
+
+  document.getElementById('resultCount').textContent = data.count + ' stocks';
+  const tbody = document.getElementById('screenerBody');
+
+  if (!data.results.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No stocks match the selected criteria.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.results.map(r => {
+    const sigClass = r.signal === 'BUY' ? 'badge-bullish' : r.signal === 'SELL' ? 'badge-bearish' : 'badge-idle';
+    const rsiClass = r.rsi < 30 ? 'text-success' : r.rsi > 70 ? 'text-danger' : '';
+    const macdClass = r.macd_trend === 'bullish' ? 'text-success' : r.macd_trend === 'bearish' ? 'text-danger' : 'text-muted';
+    return `<tr>
+      <td><a href="/stock/${r.symbol}" class="fw-semibold text-accent">${r.symbol}</a></td>
+      <td class="text-end">${r.price ? '₹' + r.price.toLocaleString('en-IN') : '—'}</td>
+      <td class="text-center"><span class="mm-badge ${sigClass}">${r.signal}</span></td>
+      <td class="text-end ${rsiClass}">${r.rsi !== null ? r.rsi.toFixed(1) : '—'}</td>
+      <td class="text-center ${macdClass} small">${r.macd_trend || '—'}</td>
+      <td class="text-end">${r.bb_percent_b !== null ? (r.bb_percent_b * 100).toFixed(0) + '%' : '—'}</td>
+      <td class="text-end">${r.ma20 ? '₹' + r.ma20.toLocaleString('en-IN') : '—'}</td>
+      <td class="text-center small">
+        <span class="text-success">▲ ${r.bullish_count}</span> /
+        <span class="text-danger">▼ ${r.bearish_count}</span>
+      </td>
+      <td class="text-center">
+        <a href="/stock/${r.symbol}" class="btn btn-sm btn-outline-secondary">View</a>
+      </td>
+    </tr>`;
+  }).join('');
+}
+</script>
+{% endblock %}

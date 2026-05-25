@@ -92,6 +92,34 @@
       <div class="mm-card-body"><canvas id="priceChart" height="120"></canvas></div>
     </div>
 
+    <!-- ── Technical Indicators Panel ─────────────────────────────────────── -->
+    <div class="mm-card mb-3" id="indicatorsCard">
+      <div class="mm-card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-bar-chart-steps text-accent me-1"></i>Technical Indicators</span>
+        <span id="techSignalBadge" class="mm-badge badge-idle">Loading…</span>
+      </div>
+      <div class="mm-card-body" id="indicatorsBody">
+        <div class="text-center text-muted py-3">
+          <div class="spinner-border spinner-border-sm me-2"></div>Fetching indicators…
+        </div>
+      </div>
+    </div>
+    <!-- ── RSI Chart ───────────────────────────────────────────────────────── -->
+    <div class="mm-card mb-3" id="rsiChartCard" style="display:none">
+      <div class="mm-card-header"><i class="bi bi-activity text-accent me-1"></i>RSI (14)</div>
+      <div class="mm-card-body"><canvas id="rsiChart" height="80"></canvas></div>
+    </div>
+    <!-- ── MACD Chart ──────────────────────────────────────────────────────── -->
+    <div class="mm-card mb-3" id="macdChartCard" style="display:none">
+      <div class="mm-card-header"><i class="bi bi-bar-chart text-accent me-1"></i>MACD (12,26,9)</div>
+      <div class="mm-card-body"><canvas id="macdChart" height="80"></canvas></div>
+    </div>
+    <!-- ── Bollinger Bands Chart ───────────────────────────────────────────── -->
+    <div class="mm-card mb-3" id="bbChartCard" style="display:none">
+      <div class="mm-card-header"><i class="bi bi-graph-up-arrow text-accent me-1"></i>Bollinger Bands (20,2)</div>
+      <div class="mm-card-body"><canvas id="bbChart" height="80"></canvas></div>
+    </div>
+
     {% if chart_names %}
     <div class="mm-card mb-3">
       <div class="mm-card-header"><i class="bi bi-image me-1"></i>Report Charts</div>
@@ -386,7 +414,145 @@ document.addEventListener('DOMContentLoaded', () => {
   loadLiveQuote();
   loadIntradayChart();
   loadHistChart();
+  loadIndicators();
   setInterval(loadLiveQuote, 60000);
 });
+
+// ── Technical Indicators ──────────────────────────────────────────────────────
+let rsiChartObj = null, macdChartObj = null, bbChartObj = null;
+
+async function loadIndicators() {
+  const resp = await fetch(`/api/stock/${SYMBOL}/indicators`);
+  const d = await resp.json();
+
+  if (d.error) {
+    document.getElementById('indicatorsBody').innerHTML =
+      `<p class="text-muted small">${d.error}</p>`;
+    return;
+  }
+
+  // Signal badge
+  const sig = d.summary?.signal || 'HOLD';
+  const badgeEl = document.getElementById('techSignalBadge');
+  badgeEl.textContent = sig;
+  badgeEl.className = 'mm-badge ' + (sig === 'BUY' ? 'badge-bullish' : sig === 'SELL' ? 'badge-bearish' : 'badge-idle');
+
+  // Summary HTML
+  const rsi = d.rsi || {};
+  const macd = d.macd || {};
+  const bb = d.bollinger || {};
+  const ma = d.moving_averages || {};
+  const bCount = d.summary?.bullish || 0;
+  const beCount = d.summary?.bearish || 0;
+
+  document.getElementById('indicatorsBody').innerHTML = `
+    <div class="row g-3">
+      <div class="col-6 col-md-3">
+        <div class="small text-muted">RSI (14)</div>
+        <div class="fw-bold fs-5 ${rsi.value < 30 ? 'text-success' : rsi.value > 70 ? 'text-danger' : ''}">${rsi.value ?? '—'}</div>
+        <div class="text-muted" style="font-size:11px">${rsi.signal || ''}</div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="small text-muted">MACD</div>
+        <div class="fw-bold ${macd.trend === 'bullish' ? 'text-success' : macd.trend === 'bearish' ? 'text-danger' : ''}">${macd.value ?? '—'}</div>
+        <div class="text-muted" style="font-size:11px">${macd.trend || ''} ${macd.crossover ? '· ' + macd.crossover : ''}</div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="small text-muted">BB %B</div>
+        <div class="fw-bold">${bb.percent_b != null ? (bb.percent_b * 100).toFixed(0) + '%' : '—'}</div>
+        <div class="text-muted" style="font-size:11px">${bb.signal || ''}</div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="small text-muted">Signals</div>
+        <div class="fw-bold"><span class="text-success">▲ ${bCount} bullish</span> / <span class="text-danger">▼ ${beCount} bearish</span></div>
+      </div>
+    </div>
+    <hr class="my-2">
+    <div class="row g-2 small text-muted">
+      <div class="col-4">MA20: <span class="text-white fw-semibold">${ma.ma20 ? '₹' + ma.ma20 : '—'}</span></div>
+      <div class="col-4">MA50: <span class="text-white fw-semibold">${ma.ma50 ? '₹' + ma.ma50 : '—'}</span></div>
+      <div class="col-4">MA200: <span class="text-white fw-semibold">${ma.ma200 ? '₹' + ma.ma200 : '—'}</span></div>
+    </div>`;
+
+  // RSI chart
+  if (d.rsi?.history?.length) {
+    document.getElementById('rsiChartCard').style.display = '';
+    if (rsiChartObj) rsiChartObj.destroy();
+    rsiChartObj = new Chart(document.getElementById('rsiChart'), {
+      type: 'line',
+      data: {
+        labels: d.rsi.history.map((_, i) => i + 1),
+        datasets: [{
+          label: 'RSI', data: d.rsi.history, borderColor: '#a78bfa',
+          backgroundColor: 'rgba(167,139,250,0.1)', fill: true, tension: 0.3, pointRadius: 0,
+        }]
+      },
+      options: {
+        responsive: true, plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 100, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
+               drawBorder: false },
+          x: { display: false }
+        },
+        plugins: {
+          annotation: { annotations: {
+            ob: { type: 'line', yMin: 70, yMax: 70, borderColor: 'rgba(239,68,68,0.5)', borderWidth: 1, borderDash: [4,4] },
+            os: { type: 'line', yMin: 30, yMax: 30, borderColor: 'rgba(34,197,94,0.5)', borderWidth: 1, borderDash: [4,4] },
+          }}
+        }
+      }
+    });
+  }
+
+  // MACD chart
+  if (d.macd?.history?.macd?.length) {
+    document.getElementById('macdChartCard').style.display = '';
+    const hist = d.macd.history;
+    if (macdChartObj) macdChartObj.destroy();
+    macdChartObj = new Chart(document.getElementById('macdChart'), {
+      type: 'bar',
+      data: {
+        labels: hist.macd.map((_, i) => i + 1),
+        datasets: [
+          { type: 'line', label: 'MACD', data: hist.macd, borderColor: '#60a5fa', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0 },
+          { type: 'line', label: 'Signal', data: hist.signal, borderColor: '#f472b6', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0 },
+          { label: 'Histogram', data: hist.histogram, backgroundColor: hist.histogram.map(v => v >= 0 ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)') }
+        ]
+      },
+      options: {
+        responsive: true, plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 12 } } },
+        scales: {
+          y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          x: { display: false }
+        }
+      }
+    });
+  }
+
+  // Bollinger chart
+  if (d.bollinger?.history?.upper?.length) {
+    document.getElementById('bbChartCard').style.display = '';
+    const h = d.bollinger.history;
+    if (bbChartObj) bbChartObj.destroy();
+    bbChartObj = new Chart(document.getElementById('bbChart'), {
+      type: 'line',
+      data: {
+        labels: h.upper.map((_, i) => i + 1),
+        datasets: [
+          { label: 'Upper', data: h.upper, borderColor: 'rgba(239,68,68,0.6)', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0, borderDash: [4,3] },
+          { label: 'Middle', data: h.middle, borderColor: '#94a3b8', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0 },
+          { label: 'Lower', data: h.lower, borderColor: 'rgba(34,197,94,0.6)', backgroundColor: 'rgba(34,197,94,0.05)', fill: '-1', tension: 0.3, pointRadius: 0, borderDash: [4,3] },
+        ]
+      },
+      options: {
+        responsive: true, plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 12 } } },
+        scales: {
+          y: { ticks: { color: '#94a3b8', callback: v => '₹' + v.toLocaleString('en-IN') }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          x: { display: false }
+        }
+      }
+    });
+  }
+}
 </script>
 {% endblock %}

@@ -59,8 +59,9 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
-# Environment variables
+# Environment variables — NEVER commit these
 .env
+.env.*
 .env.local
 .env.*.local
 

@@ -32,9 +32,27 @@
       <a href="/alerts" class="mm-nav-link {% if request.path == '/alerts' %}active{% endif %}">
         <i class="bi bi-bell"></i> Alerts
       </a>
+      <a href="/screener" class="mm-nav-link {% if request.path == '/screener' %}active{% endif %}">
+        <i class="bi bi-funnel"></i> Screener
+      </a>
+      <a href="/backtest" class="mm-nav-link {% if request.path == '/backtest' %}active{% endif %}">
+        <i class="bi bi-graph-up-arrow"></i> Backtest
+      </a>
       <a href="/subscribe" class="mm-nav-link {% if request.path == '/subscribe' %}active{% endif %}">
         <i class="bi bi-envelope-heart"></i> Subscribe
       </a>
+      {% if current_user.is_authenticated %}
+      <a href="/portfolio" class="mm-nav-link {% if request.path == '/portfolio' %}active{% endif %}">
+        <i class="bi bi-briefcase"></i> Portfolio
+      </a>
+      <a href="/logout" class="mm-nav-link">
+        <i class="bi bi-box-arrow-right"></i> Logout
+      </a>
+      {% else %}
+      <a href="/login" class="mm-nav-link {% if request.path == '/login' %}active{% endif %}">
+        <i class="bi bi-person-circle"></i> Login
+      </a>
+      {% endif %}
     </div>
     <div class="d-flex align-items-center gap-2">
       <span id="pipeline-badge" class="mm-badge badge-idle">
@@ -72,10 +90,21 @@
     <i class="bi bi-bell"></i>
     <span>Alerts</span>
   </a>
-  <a href="/subscribe" class="mm-bottom-item {% if request.path == '/subscribe' %}active{% endif %}">
-    <i class="bi bi-envelope-heart"></i>
-    <span>Subscribe</span>
+  <a href="/screener" class="mm-bottom-item {% if request.path == '/screener' %}active{% endif %}">
+    <i class="bi bi-funnel"></i>
+    <span>Screener</span>
   </a>
+  {% if current_user.is_authenticated %}
+  <a href="/portfolio" class="mm-bottom-item {% if request.path == '/portfolio' %}active{% endif %}">
+    <i class="bi bi-briefcase"></i>
+    <span>Portfolio</span>
+  </a>
+  {% else %}
+  <a href="/login" class="mm-bottom-item {% if request.path == '/login' %}active{% endif %}">
+    <i class="bi bi-person-circle"></i>
+    <span>Login</span>
+  </a>
+  {% endif %}
   <button class="mm-bottom-item mm-bottom-run" onclick="openRunModal()">
     <div class="mm-bottom-run-btn"><i class="bi bi-play-fill"></i></div>
     <span>Run</span>
@@ -91,7 +120,7 @@
           <h5 class="modal-title mb-0" id="runModalLabel">
             <i class="bi bi-cpu text-accent me-2"></i>Run Market Analysis
           </h5>
-          <p class="text-muted small mb-0 mt-1">Select stocks and recipients, then run the full AI pipeline</p>
+          <p class="text-muted small mb-0 mt-1">Select stocks to analyse &mdash; email &amp; Telegram alerts are both optional</p>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
@@ -135,16 +164,17 @@
           </div>
         </div>
 
-        <!-- Step 2: Email Recipients -->
+        <!-- Step 2: Email Recipients (Optional) -->
         <div class="mm-section">
-          <div class="mm-section-header">
+          <div class="mm-section-header" style="cursor:pointer" onclick="toggleEmailSection()">
             <span class="mm-step">2</span>
             <div>
-              <div class="fw-semibold">Email Recipients</div>
-              <div class="text-muted small">Add one or more email addresses to send the report</div>
+              <div class="fw-semibold">Email Report <span class="badge ms-1" style="font-size:10px;background:rgba(255,255,255,0.15);color:var(--mm-text-muted)">Optional</span></div>
+              <div class="text-muted small">Send the full analysis report to one or more email addresses</div>
             </div>
+            <i class="bi bi-chevron-down ms-auto" id="emailChevron" style="transition:transform .2s"></i>
           </div>
-
+          <div id="emailSection">
           <!-- Email tag input -->
           <div class="mm-email-container" id="emailContainer" onclick="document.getElementById('emailInput').focus()">
             <div id="emailTags" class="mm-email-tags"></div>
@@ -160,6 +190,21 @@
           </div>
           <div class="mt-2 text-muted" style="font-size:12px">
             <i class="bi bi-info-circle me-1"></i>Press <kbd>Enter</kbd> or <kbd>,</kbd> after each email to add it as a tag
+          </div>
+          </div><!-- /emailSection -->
+        </div>
+
+        <!-- Step 3: Telegram Alerts (Auto) -->
+        <div class="mm-section">
+          <div class="mm-section-header">
+            <span class="mm-step">3</span>
+            <div>
+              <div class="fw-semibold"><i class="bi bi-telegram me-1 text-accent"></i>Telegram Alerts <span class="badge ms-1" style="font-size:10px;background:rgba(255,255,255,0.15);color:var(--mm-text-muted)">Auto</span></div>
+              <div class="text-muted small">Signals are pushed to subscribed users for stocks in their watchlist</div>
+            </div>
+          </div>
+          <div id="runTelegramInfo" class="text-muted small">
+            <span class="spinner-border spinner-border-sm me-1" style="width:12px;height:12px"></span> Checking&hellip;
           </div>
         </div>
       </div>

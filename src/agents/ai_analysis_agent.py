@@ -181,10 +181,23 @@ class AIAnalysisAgent(BaseAgent):
             if not self._gemini_client:
                 raise RuntimeError("Gemini client not initialised")
             full_prompt = f"{system_msg}\n\n{user_msg}"
-            response = self._gemini_client.models.generate_content(
-                model=self.gemini_model_name,
-                contents=full_prompt,
-            )
+            try:
+                response = self._gemini_client.models.generate_content(
+                    model=self.gemini_model_name,
+                    contents=full_prompt,
+                )
+            except Exception as exc:
+                err_str = str(exc)
+                if "403" in err_str or "PERMISSION_DENIED" in err_str or "denied access" in err_str.lower():
+                    self.logger.error(
+                        "Gemini API 403 PERMISSION_DENIED — the project key has been denied. "
+                        "Go to https://aistudio.google.com, create a new API key, and update "
+                        "GEMINI_API_KEY in your .env file."
+                    )
+                    raise RuntimeError(
+                        "Gemini API access denied (403). Please rotate your GEMINI_API_KEY."
+                    ) from exc
+                raise
             return response.text or ""
 
         elif self.llm_provider == "openai":

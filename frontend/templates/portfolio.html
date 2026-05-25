@@ -1,0 +1,363 @@
+{% extends "base.html" %}
+{% block title %}Portfolio · MarketMind AI{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-3 px-lg-4" style="padding-top:80px;padding-bottom:80px">
+
+  <!-- Header -->
+  <div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+    <div>
+      <h4 class="fw-bold mb-0"><i class="bi bi-briefcase text-accent me-2"></i>My Portfolio</h4>
+      <p class="text-muted small mb-0">Track open positions and unrealised P&amp;L</p>
+    </div>
+    <button class="mm-btn-primary" data-bs-toggle="modal" data-bs-target="#addPositionModal">
+      <i class="bi bi-plus-lg me-1"></i>Add Position
+    </button>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="row g-3 mb-4" id="portfolioSummary">
+    <div class="col-6 col-md-3">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Invested</div>
+        <div class="mm-kpi-value" id="totalInvested">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Current Value</div>
+        <div class="mm-kpi-value" id="totalCurrent">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Total P&amp;L</div>
+        <div class="mm-kpi-value" id="totalPnl">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Return %</div>
+        <div class="mm-kpi-value" id="totalPnlPct">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Positions table -->
+  <div class="mm-card">
+    <div class="mm-card-header">
+      <i class="bi bi-table text-accent me-2"></i>Open Positions
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0" id="positionsTable">
+        <thead>
+          <tr class="text-muted small">
+            <th>Symbol</th>
+            <th class="text-end">Qty</th>
+            <th class="text-end">Buy Price</th>
+            <th class="text-end">Current</th>
+            <th class="text-end">Invested</th>
+            <th class="text-end">Current Val.</th>
+            <th class="text-end">P&amp;L</th>
+            <th class="text-end">P&amp;L %</th>
+            <th class="text-center">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="positionsBody">
+          <tr><td colspan="9" class="text-center text-muted py-4">
+            <div class="spinner-border spinner-border-sm me-2"></div>Loading positions…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Watchlist section -->
+  <div class="mm-card mt-4">
+    <div class="mm-card-header d-flex align-items-center justify-content-between">
+      <span>
+        <i class="bi bi-eye text-accent me-2"></i>Watchlist
+        <span class="badge bg-accent ms-2" style="font-size:10px;background:var(--mm-accent);color:#000">
+          <i class="bi bi-telegram me-1"></i>Telegram alerts for these stocks
+        </span>
+      </span>
+      <div class="d-flex gap-2">
+        <input type="text" id="watchlistInput" class="form-control form-control-sm mm-input" placeholder="Symbol e.g. HDFC" style="width:140px">
+        <button class="mm-btn-outline-sm" onclick="toggleWatch(document.getElementById('watchlistInput').value)">
+          <i class="bi bi-plus-lg"></i> Add
+        </button>
+      </div>
+    </div>
+    <div id="watchlistChips" class="p-3 d-flex flex-wrap gap-2">
+      <span class="text-muted small">Loading…</span>
+    </div>
+  </div>
+
+  <!-- Telegram setup -->
+  <div class="mm-card mt-4">
+    <div class="mm-card-header"><i class="bi bi-telegram text-accent me-2"></i>Telegram Alerts</div>
+    <div class="p-3">
+
+      <!-- Not linked state -->
+      <div id="tgUnlinked">
+        <p class="text-muted small mb-3">
+          Subscribe to the MarketMind AI bot on Telegram to receive real-time signal
+          alerts. Click the button below — it opens Telegram with a pre-filled link.
+          Just press <strong>Start</strong> and you're done. No copy-pasting required.
+        </p>
+        <button class="mm-btn-primary" id="tgSubscribeBtn" onclick="subscribeTelegram()">
+          <i class="bi bi-telegram me-2"></i>Subscribe to Alerts
+        </button>
+        <div id="tgStatus" class="mt-3 small"></div>
+      </div>
+
+      <!-- Linked state -->
+      <div id="tgLinked" style="display:none">
+        <div class="d-flex align-items-center gap-3 mb-3">
+          <span class="badge bg-success fs-6 px-3 py-2"><i class="bi bi-check-circle me-1"></i>Connected</span>
+          <span class="text-muted small">You are subscribed to Telegram alerts.</span>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="mm-btn-outline-sm" onclick="testTelegram()">Send Test Message</button>
+          <button class="mm-btn-outline-sm text-danger" onclick="unsubscribeTelegram()">Unsubscribe</button>
+        </div>
+        <div id="tgLinkedStatus" class="mt-2 small"></div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- Add Position Modal -->
+<div class="modal fade" id="addPositionModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content mm-modal">
+      <div class="modal-header mm-modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle text-accent me-2"></i>Add Position</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Symbol</label>
+          <input type="text" id="addSymbol" class="form-control mm-input" placeholder="e.g. RELIANCE">
+        </div>
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label small fw-semibold">Quantity</label>
+            <input type="number" id="addQty" class="form-control mm-input" placeholder="10" min="0.01" step="0.01">
+          </div>
+          <div class="col-6">
+            <label class="form-label small fw-semibold">Avg Buy Price (₹)</label>
+            <input type="number" id="addPrice" class="form-control mm-input" placeholder="2500" min="0.01" step="0.01">
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="form-label small fw-semibold">Notes (optional)</label>
+          <input type="text" id="addNotes" class="form-control mm-input" placeholder="Reason for entry…">
+        </div>
+      </div>
+      <div class="modal-footer mm-modal-footer">
+        <button class="mm-btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="mm-btn-primary" onclick="addPosition()">Add Position</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Close Position Modal -->
+<div class="modal fade" id="closePositionModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content mm-modal">
+      <div class="modal-header mm-modal-header">
+        <h5 class="modal-title"><i class="bi bi-check2-circle text-success me-2"></i>Close Position</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small">Enter the sell price for <strong id="closeSymbolName">—</strong></p>
+        <input type="hidden" id="closePositionId">
+        <label class="form-label small fw-semibold">Sell Price (₹)</label>
+        <input type="number" id="closeSellPrice" class="form-control mm-input" placeholder="0.00" step="0.01">
+      </div>
+      <div class="modal-footer mm-modal-footer">
+        <button class="mm-btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-success" onclick="closePosition()">Confirm Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadPortfolio() {
+  const resp = await fetch('/api/portfolio');
+  const data = await resp.json();
+  const s = data.summary;
+  document.getElementById('totalInvested').textContent = '₹' + s.total_invested.toLocaleString('en-IN');
+  document.getElementById('totalCurrent').textContent = '₹' + s.total_current.toLocaleString('en-IN');
+  const pnlEl = document.getElementById('totalPnl');
+  pnlEl.textContent = (s.total_pnl >= 0 ? '+₹' : '-₹') + Math.abs(s.total_pnl).toLocaleString('en-IN');
+  pnlEl.className = 'mm-kpi-value ' + (s.total_pnl >= 0 ? 'text-success' : 'text-danger');
+  const pctEl = document.getElementById('totalPnlPct');
+  pctEl.textContent = (s.total_pnl_pct >= 0 ? '+' : '') + s.total_pnl_pct + '%';
+  pctEl.className = 'mm-kpi-value ' + (s.total_pnl_pct >= 0 ? 'text-success' : 'text-danger');
+
+  const tbody = document.getElementById('positionsBody');
+  if (!data.positions.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-5">No open positions yet. Click "Add Position" to get started.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.positions.map(p => {
+    const pnlClass = p.pnl >= 0 ? 'text-success' : 'text-danger';
+    return `<tr>
+      <td><a href="/stock/${p.symbol}" class="fw-semibold text-accent">${p.symbol}</a></td>
+      <td class="text-end">${p.quantity}</td>
+      <td class="text-end">₹${p.avg_buy_price.toLocaleString('en-IN')}</td>
+      <td class="text-end">₹${p.current_price.toLocaleString('en-IN')}</td>
+      <td class="text-end">₹${(p.avg_buy_price * p.quantity).toLocaleString('en-IN')}</td>
+      <td class="text-end">₹${p.current_value.toLocaleString('en-IN')}</td>
+      <td class="text-end ${pnlClass}">${p.pnl >= 0 ? '+' : ''}₹${Math.abs(p.pnl).toLocaleString('en-IN')}</td>
+      <td class="text-end ${pnlClass}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct}%</td>
+      <td class="text-center">
+        <button class="btn btn-sm btn-outline-success me-1" onclick="openClose(${p.id},'${p.symbol}')">Close</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deletePos(${p.id})"><i class="bi bi-trash3"></i></button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function addPosition() {
+  const sym = document.getElementById('addSymbol').value.trim().toUpperCase();
+  const qty = parseFloat(document.getElementById('addQty').value);
+  const price = parseFloat(document.getElementById('addPrice').value);
+  const notes = document.getElementById('addNotes').value;
+  if (!sym || isNaN(qty) || isNaN(price)) { alert('Please fill all fields.'); return; }
+  await fetch('/api/portfolio/add', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({symbol: sym, quantity: qty, avg_buy_price: price, notes})
+  });
+  bootstrap.Modal.getInstance(document.getElementById('addPositionModal'))?.hide();
+  loadPortfolio();
+}
+
+function openClose(id, sym) {
+  document.getElementById('closePositionId').value = id;
+  document.getElementById('closeSymbolName').textContent = sym;
+  new bootstrap.Modal(document.getElementById('closePositionModal')).show();
+}
+
+async function closePosition() {
+  const id = document.getElementById('closePositionId').value;
+  const price = parseFloat(document.getElementById('closeSellPrice').value);
+  await fetch(`/api/portfolio/close/${id}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sell_price: price})
+  });
+  bootstrap.Modal.getInstance(document.getElementById('closePositionModal'))?.hide();
+  loadPortfolio();
+}
+
+async function deletePos(id) {
+  if (!confirm('Delete this position?')) return;
+  await fetch(`/api/portfolio/delete/${id}`, {method: 'DELETE'});
+  loadPortfolio();
+}
+
+async function loadWatchlist() {
+  const resp = await fetch('/api/watchlist');
+  const data = await resp.json();
+  const el = document.getElementById('watchlistChips');
+  if (!data.watchlist.length) {
+    el.innerHTML = '<span class="text-muted small">Watchlist is empty — add stocks here to receive Telegram alerts for them.</span>';
+    return;
+  }
+  el.innerHTML = data.watchlist.map(s =>
+    `<span class="mm-badge badge-idle me-1">
+      <a href="/stock/${s}" class="text-decoration-none text-white">${s}</a>
+      <button class="btn-close btn-close-white ms-1" style="font-size:9px" onclick="toggleWatch('${s}')"></button>
+    </span>`
+  ).join('');
+}
+
+async function toggleWatch(sym) {
+  if (!sym) return;
+  await fetch(`/api/watchlist/toggle/${sym.toUpperCase()}`, {method: 'POST'});
+  document.getElementById('watchlistInput').value = '';
+  loadWatchlist();
+}
+
+async function loadTelegramStatus() {
+  try {
+    const d = await (await fetch('/api/telegram/status')).json();
+    if (!d.server_configured) {
+      document.getElementById('tgStatus').innerHTML =
+        '<span class="text-warning">⚠ Telegram is not configured on this server.</span>';
+      return;
+    }
+    if (d.linked) {
+      document.getElementById('tgUnlinked').style.display = 'none';
+      document.getElementById('tgLinked').style.display = 'block';
+    }
+  } catch(e) {}
+}
+
+async function subscribeTelegram() {
+  const btn = document.getElementById('tgSubscribeBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating link…';
+  try {
+    const d = await (await fetch('/api/telegram/subscribe-link')).json();
+    if (d.link) {
+      // Open Telegram deep-link in a new tab
+      window.open(d.link, '_blank');
+      document.getElementById('tgStatus').innerHTML =
+        '<span class="text-info">📲 Telegram opened. Press <strong>Start</strong> in the bot chat. ' +
+        'This page will refresh in 10 s to confirm.</span>';
+      // Auto-confirm after 10 seconds
+      setTimeout(async () => {
+        const s = await (await fetch('/api/telegram/status')).json();
+        if (s.linked) {
+          document.getElementById('tgUnlinked').style.display = 'none';
+          document.getElementById('tgLinked').style.display = 'block';
+        } else {
+          document.getElementById('tgStatus').innerHTML =
+            '<span class="text-muted">Not detected yet — please press Start in Telegram, then ' +
+            '<a href="" onclick="location.reload()">refresh this page</a>.</span>';
+          btn.disabled = false;
+          btn.innerHTML = '<i class="bi bi-telegram me-2"></i>Subscribe to Alerts';
+        }
+      }, 10000);
+    } else {
+      document.getElementById('tgStatus').innerHTML = `<span class="text-danger">${d.error}</span>`;
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-telegram me-2"></i>Subscribe to Alerts';
+    }
+  } catch(e) {
+    document.getElementById('tgStatus').innerHTML = '<span class="text-danger">Network error. Try again.</span>';
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-telegram me-2"></i>Subscribe to Alerts';
+  }
+}
+
+async function testTelegram() {
+  const resp = await fetch('/api/telegram/test', {method: 'POST'});
+  const d = await resp.json();
+  document.getElementById('tgLinkedStatus').innerHTML =
+    d.success ? '<span class="text-success">✓ Test message sent! Check Telegram.</span>'
+              : `<span class="text-danger">${d.error}</span>`;
+}
+
+async function unsubscribeTelegram() {
+  if (!confirm('Remove your Telegram subscription?')) return;
+  await fetch('/api/telegram/unsubscribe', {method: 'POST'});
+  document.getElementById('tgLinked').style.display = 'none';
+  document.getElementById('tgUnlinked').style.display = 'block';
+  document.getElementById('tgStatus').innerHTML = '<span class="text-muted">Unsubscribed.</span>';
+}
+
+loadPortfolio();
+loadWatchlist();
+loadTelegramStatus();
+</script>
+{% endblock %}
