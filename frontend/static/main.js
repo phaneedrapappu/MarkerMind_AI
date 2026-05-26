@@ -47,6 +47,12 @@ let _tgSubscribers = -1;  // -1 = loading, 0 = none subscribed, N = ready
 let _runModal = null;
 
 function openRunModal() {
+  // Run Analysis requires an authenticated session
+  if (typeof MM_LOGGED_IN !== 'undefined' && !MM_LOGGED_IN) {
+    showToast('Please log in to run analysis', 'warn');
+    setTimeout(() => { window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname); }, 1200);
+    return;
+  }
   if (!_runModal) _runModal = new bootstrap.Modal(document.getElementById('runModal'));
   _tgSubscribers = -1;  // reset so updateRunSummary starts in "loading" state
   loadStockCatalog();
@@ -274,11 +280,17 @@ async function launchPipeline() {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body),
     });
+    if (res.status === 401) {
+      setBadge('idle', 'Idle');
+      showToast('Session expired — please log in again', 'error');
+      setTimeout(() => { window.location.href = '/login'; }, 1500);
+      return;
+    }
     const data = await res.json();
     if (data.status === 'started') { showToast('Pipeline started', 'success'); pollPipelineStatus(); }
     else if (data.status === 'already_running') { showToast('Already running', 'warn'); pollPipelineStatus(); }
-    else { setBadge('error','Error'); showToast('Failed to start', 'error'); }
-  } catch(err) { setBadge('error','Error'); showToast('Network error', 'error'); }
+    else { setBadge('error','Error'); showToast(data.error || 'Failed to start', 'error'); }
+  } catch(err) { setBadge('error','Error'); showToast('Could not reach server — is it running?', 'error'); }
 }
 
 function pollPipelineStatus() {

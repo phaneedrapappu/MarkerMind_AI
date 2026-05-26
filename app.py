@@ -85,6 +85,13 @@ login_manager.login_view = "login"
 login_manager.login_message = "Please log in to access this page."
 login_manager.login_message_category = "warning"
 
+@login_manager.unauthorized_handler
+def _unauthorized():
+    """Return JSON 401 for API requests; redirect to login for browser pages."""
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Not logged in", "redirect": "/login"}), 401
+    return redirect(url_for(login_manager.login_view, next=request.url))
+
 
 class _FlaskUser(UserMixin):
     """Thin wrapper so Flask-Login is happy."""
