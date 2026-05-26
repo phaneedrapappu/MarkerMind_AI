@@ -147,7 +147,7 @@ python3 app.py
 # Open http://localhost:5050
 ```
 
-- Click **Run Analysis** (navbar or the ▶ floating button on mobile)
+- Click **Run Analysis** in the navbar (or the ▶ button on mobile) — **login required**; non-logged-in users see a "Login to Run" button that redirects to `/login`
 - **Pick stocks** from 80+ NSE symbols grouped by sector, use the search box, or choose a preset
 - **Add recipients** — type emails one by one (press `Enter` or `,` after each); add as many as you need
 - Hit **Run Analysis** — the pipeline runs in the background, the page refreshes when done
@@ -199,20 +199,20 @@ curl http://localhost:5050/api/pipeline/status
 
 ## 🌐 Web Dashboard Pages
 
-| URL | Description |
-|---|---|
-| `/` | Dashboard — KPI cards, signals table, **India + Global news tabs**, signal donut chart |
-| `/stock/<SYMBOL>` | Stock detail — price history, **RSI / MACD / Bollinger charts**, AI analysis, bulk deals |
-| `/screener` | **Stock Screener** — filter by sector, signal, RSI range, MACD trend |
-| `/backtest` | **Signal Backtesting** — simulate historical signals, P&L log, equity curve chart |
-| `/portfolio` | **Portfolio dashboard** — open positions, real-time P&L, watchlist, Telegram config |
-| `/login` | User login page |
-| `/register` | User registration page |
-| `/logout` | Log out and redirect to login |
-| `/alerts` | Email alert history — recipients shown as coloured pill tags |
-| `/subscribe` | **Subscription sign-up** — pick stocks, enter email, subscribe for 2×/day digests |
-| `/unsubscribe?token=…` | One-click unsubscribe |
-| `/api/*` | REST JSON API endpoints |
+| URL | Login Required | Description |
+|---|---|---|
+| `/` | No | Dashboard — KPI cards, signals table, **India + Global news tabs**, signal donut chart |
+| `/stock/<SYMBOL>` | No | Stock detail — price history, **RSI / MACD / Bollinger charts**, AI analysis |
+| `/screener` | No | **Stock Screener** — filter by sector, signal, RSI range, MACD trend |
+| `/backtest` | No | **Signal Backtesting** — simulate historical signals, P&L log, equity curve chart |
+| `/alerts` | No | Email alert history |
+| `/subscribe` | No | **Email Subscription** — pick stocks, subscribe for 2×/day digests |
+| `/unsubscribe?token=…` | No | One-click email unsubscribe |
+| `/login` | — | User login page |
+| `/register` | — | User registration page |
+| `/logout` | — | Log out |
+| `/portfolio` | **Yes** | Portfolio, watchlist, Telegram subscribe |
+| Run Analysis button | **Yes** | Opens the analysis modal; shows "Login to Run" → redirects to `/login` when not logged in |
 
 ### Dashboard Features
 - **Dark / Light mode** toggle (persists via localStorage)
@@ -223,6 +223,7 @@ curl http://localhost:5050/api/pipeline/status
 - **No page stale data** — upsert logic ensures each run refreshes rather than duplicates
 - **Technical indicator charts** on every stock detail page (RSI, MACD, Bollinger Bands)
 - **Login-aware nav** — shows Portfolio/Logout when authenticated, Login otherwise
+- **Login-gated Run Analysis** — navbar shows "Login to Run" for unauthenticated users; clicking redirects to `/login`
 
 ### Stock Screener (`/screener`)
 
@@ -788,7 +789,7 @@ scheduler:
 | `POST` | `/api/telegram/unsubscribe` | Remove Telegram link for current user |
 | `POST` | `/api/telegram/test` | **Send a test Telegram message** |
 | `GET` | `/api/telegram/run-info` | Subscriber count shown in Run Analysis modal |
-| `POST` | `/api/run` | Trigger pipeline; body: `{"stocks":[…], "email":[…]}` |
+| `POST` | `/api/run` | Trigger pipeline *(login required)*; body: `{"stocks":[…], "email":[…]}` |
 | `POST` | `/api/subscribe` | Subscribe or update watchlist; body: `{"email":"…", "stocks":[…]}` |
 | `POST` | `/api/unsubscribe` | Unsubscribe; body: `{"token":"…"}` |
 | `POST` | `/api/subscription/lookup` | Email the user their unsubscribe link; body: `{"email":"…"}` |
