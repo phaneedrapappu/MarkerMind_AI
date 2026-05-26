@@ -41,9 +41,11 @@ agents:
       port: 587
       use_tls: true
       use_ssl: false
-      sender: "marketmindtw@gmail.com"
+      # Sender and recipients are overridden by SMTP_USER env var at runtime.
+      # Replace the placeholder below only for local CLI default runs.
+      sender: "your-email@gmail.com"
       recipients:
-        - "marketmindtw@gmail.com"
+        - "your-email@gmail.com"
 
 # Data Sources
 data_sources:

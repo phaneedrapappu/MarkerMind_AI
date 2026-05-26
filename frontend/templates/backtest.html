@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Backtest · MarketMind AI{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-3 px-lg-4" style="padding-top:80px;padding-bottom:80px">
+
+  <div class="mb-4">
+    <h4 class="fw-bold mb-0"><i class="bi bi-graph-up-arrow text-accent me-2"></i>Signal Backtesting</h4>
+    <p class="text-muted small">Simulate historical trading signals and measure P&amp;L over a 5-day forward window</p>
+  </div>
+
+  <!-- Symbol picker -->
+  <div class="mm-card mb-4 p-3">
+    <div class="d-flex gap-3 align-items-end flex-wrap">
+      <div>
+        <label class="form-label small fw-semibold">Stock Symbol</label>
+        <input type="text" id="btSymbol" class="form-control mm-input" style="width:180px" placeholder="e.g. RELIANCE" value="RELIANCE">
+      </div>
+      <button class="mm-btn-primary" onclick="runBacktest()" id="btBtn">
+        <i class="bi bi-play-fill me-1"></i>Run Backtest
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="row g-3 mb-4" id="btStats" style="display:none!important">
+    <div class="col-6 col-md-2">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Total Trades</div>
+        <div class="mm-kpi-value" id="btTotal">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Wins</div>
+        <div class="mm-kpi-value text-success" id="btWins">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Losses</div>
+        <div class="mm-kpi-value text-danger" id="btLosses">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Win Rate</div>
+        <div class="mm-kpi-value" id="btWinRate">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="mm-kpi-card">
+        <div class="mm-kpi-label">Avg Return</div>
+        <div class="mm-kpi-value" id="btAvgPnl">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Equity curve -->
+  <div class="mm-card mb-4" id="btChartCard" style="display:none">
+    <div class="mm-card-header"><i class="bi bi-bar-chart text-accent me-2"></i>Cumulative Return</div>
+    <div class="p-3"><canvas id="btChart" height="80"></canvas></div>
+  </div>
+
+  <!-- Trades table -->
+  <div class="mm-card" id="btTableCard" style="display:none">
+    <div class="mm-card-header"><i class="bi bi-table text-accent me-2"></i>Trade Log</div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 small">
+        <thead>
+          <tr class="text-muted">
+            <th>Signal Date</th>
+            <th class="text-center">Type</th>
+            <th class="text-end">Confidence</th>
+            <th class="text-end">Entry Price</th>
+            <th>Exit Date</th>
+            <th class="text-end">Exit Price</th>
+            <th class="text-end">P&amp;L %</th>
+            <th class="text-center">Result</th>
+          </tr>
+        </thead>
+        <tbody id="btBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let btEquityChart = null;
+
+async function runBacktest() {
+  const sym = document.getElementById('btSymbol').value.trim().toUpperCase();
+  if (!sym) return;
+  const btn = document.getElementById('btBtn');
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Running…';
+  btn.disabled = true;
+
+  const resp = await fetch(`/api/backtest/${sym}`);
+  const data = await resp.json();
+
+  btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Run Backtest';
+  btn.disabled = false;
+
+  if (data.error) {
+    alert('No signals found for ' + sym + '. Run the AI pipeline first.');
+    return;
+  }
+
+  // Stats
+  document.getElementById('btTotal').textContent = data.total_trades;
+  document.getElementById('btWins').textContent = data.wins;
+  document.getElementById('btLosses').textContent = data.losses;
+  document.getElementById('btWinRate').textContent = data.win_rate + '%';
+  const avgEl = document.getElementById('btAvgPnl');
+  avgEl.textContent = (data.avg_pnl_pct >= 0 ? '+' : '') + data.avg_pnl_pct + '%';
+  avgEl.className = 'mm-kpi-value ' + (data.avg_pnl_pct >= 0 ? 'text-success' : 'text-danger');
+
+  document.getElementById('btStats').style.removeProperty('display');
+  document.getElementById('btChartCard').style.display = '';
+  document.getElementById('btTableCard').style.display = '';
+
+  // Equity curve
+  let cumulative = 0;
+  const labels = [], equitySeries = [];
+  data.trades.forEach(t => {
+    cumulative += t.pnl_pct;
+    labels.push(t.signal_date);
+    equitySeries.push(parseFloat(cumulative.toFixed(2)));
+  });
+
+  if (btEquityChart) btEquityChart.destroy();
+  btEquityChart = new Chart(document.getElementById('btChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Cumulative Return %',
+        data: equitySeries,
+        borderColor: '#6366f1',
+        backgroundColor: 'rgba(99,102,241,0.15)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 2,
+      }]
+    },
+    options: {
+      responsive: true, plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { color: '#94a3b8', callback: v => v + '%' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
+    }
+  });
+
+  // Table
+  document.getElementById('btBody').innerHTML = data.trades.map(t => {
+    const pnlClass = t.pnl_pct >= 0 ? 'text-success' : 'text-danger';
+    const badge = t.win ? '<span class="mm-badge badge-bullish">WIN</span>' : '<span class="mm-badge badge-bearish">LOSS</span>';
+    return `<tr>
+      <td>${t.signal_date}</td>
+      <td class="text-center"><span class="mm-badge ${t.signal_type === 'BUY' ? 'badge-bullish' : 'badge-bearish'}">${t.signal_type}</span></td>
+      <td class="text-end">${t.confidence ? t.confidence + '%' : '—'}</td>
+      <td class="text-end">₹${t.entry_price.toLocaleString('en-IN')}</td>
+      <td>${t.exit_date}</td>
+      <td class="text-end">₹${t.exit_price.toLocaleString('en-IN')}</td>
+      <td class="text-end ${pnlClass}">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct}%</td>
+      <td class="text-center">${badge}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+{% endblock %}

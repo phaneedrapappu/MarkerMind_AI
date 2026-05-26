@@ -169,7 +169,7 @@
         </div>
         <div id="suggLoading" style="display:none;padding:28px;text-align:center">
           <span class="spinner-border spinner-border-sm me-2 text-accent"></span>
-          <span class="text-muted">Gemini is reading today's news…</span>
+          <span class="text-muted">AI is reading today's news…</span>
         </div>
         <div id="suggList" style="display:none;overflow-y:auto;max-height:320px;"></div>
       </div>
@@ -312,29 +312,38 @@ function loadSuggestions(isAutoLoad) {
       document.getElementById('suggLoading').style.display = 'none';
       document.getElementById('suggBtn').disabled = false;
 
-      // Gemini overloaded (503) or explicit error
+      // AI provider overloaded (503), permission denied (403), or explicit error
       if (data.error) {
-        const is503 = data.error.toLowerCase().includes('503') ||
-                      data.error.toLowerCase().includes('high demand') ||
-                      data.error.toLowerCase().includes('unavailable');
+        const errStr = (data.error + (data.message || '')).toLowerCase();
+        const is503  = errStr.includes('503') || errStr.includes('high demand') || errStr.includes('unavailable');
+        const is403  = data.error === 'permission_denied' || errStr.includes('403') || errStr.includes('permission');
         const emptyEl = document.getElementById('suggEmpty');
         emptyEl.style.display = 'block';
-        if (is503) {
+        if (is403) {
+          emptyEl.innerHTML =
+            `<i class="bi bi-key" style="color:#f59e0b;font-size:1.4rem"></i>
+             <div class="mt-2 fw-semibold" style="font-size:13px;color:#f59e0b">AI API access denied (403)</div>
+             <div class="text-muted mt-1" style="font-size:12px;max-width:420px;margin:0 auto">
+               Your AI API key has been suspended or revoked.
+               <br><br>
+               <b>To fix:</b> Check your API key and update <code>CLAUDE_API_KEY</code> (or the key for your configured provider) in your <code>.env</code> file, then restart the server.
+             </div>`;
+          // Don't auto-retry — a 403 won't resolve on its own
+        } else if (is503) {
           emptyEl.innerHTML =
             `<i class="bi bi-hourglass-split" style="color:var(--accent)"></i>
-             <div class="mt-2 fw-semibold" style="font-size:13px">Gemini is busy right now</div>
+             <div class="mt-2 fw-semibold" style="font-size:13px">AI model is busy right now</div>
              <div class="text-muted mt-1" style="font-size:12px">High demand on the AI model. Auto-retrying in 30s…</div>
              <button class="mm-btn-primary mt-3" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()">
                <i class="bi bi-arrow-clockwise me-1"></i>Retry Now
              </button>`;
-          // Auto-retry after 30s if this was an auto-load call
           if (isAutoLoad !== false) {
             setTimeout(() => loadSuggestions(false), 30000);
           }
         } else {
           emptyEl.innerHTML =
             `<i class="bi bi-exclamation-triangle"></i>
-             <div class="mt-2" style="font-size:12px">${data.error}</div>
+             <div class="mt-2" style="font-size:12px">${data.message || data.error}</div>
              <button class="mm-btn-primary mt-2" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()">
                <i class="bi bi-arrow-clockwise me-1"></i>Retry
              </button>`;

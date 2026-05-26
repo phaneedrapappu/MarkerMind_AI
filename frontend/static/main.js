@@ -43,12 +43,15 @@ let _catalog = {};
 let _selectedStocks = new Set();
 let _activeSector = 'all';
 let _emailTags = [];
+let _tgSubscribers = -1;  // -1 = loading, 0 = none subscribed, N = ready
 let _runModal = null;
 
 function openRunModal() {
   if (!_runModal) _runModal = new bootstrap.Modal(document.getElementById('runModal'));
+  _tgSubscribers = -1;  // reset so updateRunSummary starts in "loading" state
   loadStockCatalog();
   loadRunPresets();
+  loadRunTelegramInfo();
   updateRunSummary();
   _runModal.show();
 }
@@ -214,29 +217,62 @@ function handleEmailInput(input) {
 
 function updateRunSummary() {
   const sc = _selectedStocks.size, ec = _emailTags.length;
+  const tgLoading = _tgSubscribers === -1;
+  const tgReady   = _tgSubscribers > 0;
+  const hasOutput = ec > 0 || tgReady;
   const summaryEl = document.getElementById('runSummary');
-  const runBtn = document.getElementById('runBtn');
+  const runBtn    = document.getElementById('runBtn');
+
   if (summaryEl) {
-    if (!sc && !ec) summaryEl.textContent = 'Select stocks and add recipients to start';
-    else if (!sc) summaryEl.textContent = `${ec} recipient(s) – select stocks to continue`;
-    else if (!ec) summaryEl.textContent = `${sc} stock(s) – add at least 1 recipient`;
-    else summaryEl.innerHTML = `<span class="text-accent">${sc}</span> stocks · <span class="text-accent">${ec}</span> recipient(s)`;
+    if (tgLoading && !ec) {
+      // Still waiting for Telegram status, no email either — show a spinner
+      summaryEl.innerHTML =
+        '<span class="text-muted">' +
+        '<span class="spinner-border spinner-border-sm me-1" style="width:10px;height:10px"></span>' +
+        'Checking output channels…</span>';
+    } else if (!sc) {
+      summaryEl.textContent = 'Select at least 1 stock to continue';
+    } else if (!hasOutput) {
+      summaryEl.innerHTML =
+        '<span class="text-warning">' +
+        '<i class="bi bi-exclamation-triangle-fill me-1"></i>' +
+        'No output channel — add an email recipient <strong>or</strong> ' +
+        '<a href="/portfolio" target="_blank" class="text-warning">subscribe via Telegram</a> ' +
+        'and add stocks to your Watchlist</span>';
+    } else {
+      const parts = [];
+      if (ec)      parts.push(`<span class="text-accent">${ec}</span> email(s)`);
+      if (tgReady) parts.push(
+        `<i class="bi bi-telegram me-1"></i>` +
+        `<span class="text-accent">${_tgSubscribers}</span> Telegram subscriber(s)`
+      );
+      summaryEl.innerHTML =
+        `<span class="text-accent">${sc}</span> stock(s) &nbsp;&middot;&nbsp; ` +
+        parts.join(' &amp; ');
+    }
   }
-  if (runBtn) runBtn.disabled = (!sc || !ec);
+
+  // Run enabled only when: stocks chosen AND at least one output ready AND not still loading
+  if (runBtn) runBtn.disabled = tgLoading ? !ec : (!sc || !hasOutput);
 }
 
 async function launchPipeline() {
   const stocks = [..._selectedStocks];
-  const emails = [..._emailTags];
-  if (!stocks.length || !emails.length) { showToast('Select stocks and add a recipient', 'warn'); return; }
+  const emails = [..._emailTags];  // may be empty — email is optional
+  if (!stocks.length) { showToast('Select at least 1 stock', 'warn'); return; }
   bootstrap.Modal.getInstance(document.getElementById('runModal'))?.hide();
   setBadge('running', 'Running…');
-  showToast(`Analysing ${stocks.length} stock(s)…`, 'info');
+  const msg = emails.length
+    ? `Analysing ${stocks.length} stock(s) — report will be emailed…`
+    : `Analysing ${stocks.length} stock(s) — Telegram alerts will fire if subscribed…`;
+  showToast(msg, 'info');
   try {
+    const body = {stocks};
+    if (emails.length) body.email = emails;
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({stocks, email: emails}),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (data.status === 'started') { showToast('Pipeline started', 'success'); pollPipelineStatus(); }
@@ -260,6 +296,48 @@ function pollPipelineStatus() {
 }
 
 function triggerPipeline() { openRunModal(); }
+
+// ── Email section toggle (collapsible) ───────────────────────────────────────
+let _emailSectionOpen = true;
+function toggleEmailSection() {
+  _emailSectionOpen = !_emailSectionOpen;
+  const sec = document.getElementById('emailSection');
+  const chev = document.getElementById('emailChevron');
+  if (sec) sec.style.display = _emailSectionOpen ? '' : 'none';
+  if (chev) chev.style.transform = _emailSectionOpen ? '' : 'rotate(-90deg)';
+}
+
+// ── Telegram subscriber info for the run modal ───────────────────────────────
+async function loadRunTelegramInfo() {
+  const el = document.getElementById('runTelegramInfo');
+  if (!el) return;
+  try {
+    const d = await (await fetch('/api/telegram/run-info')).json();
+    if (!d.server_configured) {
+      _tgSubscribers = 0;
+      el.innerHTML =
+        '<i class="bi bi-telegram me-1"></i>Telegram not configured on this server — ' +
+        'add email recipients to receive output.';
+    } else if (d.subscribers === 0) {
+      _tgSubscribers = 0;
+      el.innerHTML =
+        '<i class="bi bi-exclamation-triangle text-warning me-1"></i>' +
+        'No Telegram subscribers yet. ' +
+        '<a href="/portfolio" target="_blank">Subscribe on the Portfolio page</a> ' +
+        'and add stocks to your Watchlist — <em>or</em> add an email recipient above.';
+    } else {
+      _tgSubscribers = d.subscribers;
+      el.innerHTML =
+        `<i class="bi bi-check-circle text-success me-1"></i>` +
+        `<strong>${d.subscribers}</strong> user(s) subscribed. ` +
+        `Alerts will fire for whichever selected stocks are in their watchlist.`;
+    }
+  } catch {
+    _tgSubscribers = 0;
+    el.innerHTML = '<span class="text-muted">Could not load Telegram info.</span>';
+  }
+  updateRunSummary();  // re-evaluate run button now that tg state is known
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   fetch('/api/pipeline/status').then(r=>r.json()).then(d=>{
