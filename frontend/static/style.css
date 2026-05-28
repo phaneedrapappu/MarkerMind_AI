@@ -95,6 +95,23 @@ body {
 .mm-main { max-width:1400px; margin:0 auto; padding:20px 16px; }
 @media (min-width:992px){ .mm-main { padding:28px 24px; } }
 
+/* Global market status strip */
+.mm-market-strip {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  margin-bottom:14px; padding:10px 12px;
+  border:1px solid var(--border); border-radius:12px;
+  background:var(--bg-card);
+}
+.mm-market-strip.open { border-color:rgba(34,197,94,.35); }
+.mm-market-strip.closed { border-color:rgba(245,158,11,.35); }
+.mm-market-pill {
+  display:inline-flex; align-items:center; border-radius:999px;
+  padding:4px 10px; font-size:11px; font-weight:700; letter-spacing:.3px;
+}
+.mm-market-pill.open { background:var(--green-bg); color:var(--green); }
+.mm-market-pill.closed { background:rgba(245,158,11,.18); color:#f59e0b; }
+.mm-market-text { font-size:12px; color:var(--text-dim); }
+
 /* Cards */
 .mm-card {
   background:var(--bg-card); border:1px solid var(--border);

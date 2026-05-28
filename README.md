@@ -60,6 +60,7 @@ Flask Dashboard        →  Mobile-first browser UI (auth, portfolio, screener)
 | **Per-user portfolio with real-time unrealised P&L** | ✅ Phase 2 |
 | **Per-user watchlist (drives scheduled Telegram alerts)** | ✅ |
 | **Telegram bot alerts via deep-link subscribe flow** | ✅ |
+| **Global market status strip (open/closed/public holiday)** | ✅ |
 
 ---
 
@@ -218,6 +219,7 @@ curl http://localhost:5050/api/pipeline/status
 - **Dark / Light mode** toggle (persists via localStorage)
 - **Mobile bottom navigation** — Dashboard, Markets, Screener, Portfolio/Login, ▶ Run
 - **Real-time pipeline badge** — Idle / Running (animated) / Done ✓
+- **NSE market status strip** — shows Open/Closed/Public Holiday + next opening time on all pages
 - **Toast notifications** for every action
 - **India / Global news tabs** — switch between Indian market news and world market news
 - **No page stale data** — upsert logic ensures each run refreshes rather than duplicates
@@ -775,6 +777,7 @@ scheduler:
 | `GET` | `/api/stock/<symbol>/history` | Price history (JSON) |
 | `GET` | `/api/stock/<symbol>/indicators` | **RSI / MACD / Bollinger Bands (10-min cached, JSON)** |
 | `GET` | `/api/pipeline/status` | `{"running": true/false}` |
+| `GET` | `/api/market/status` | Market open/closed/holiday status + next opening time (JSON) |
 | `GET` | `/api/screener?sector=&signal=&rsi_min=&rsi_max=&macd_trend=` | **Screener results (JSON)** |
 | `GET` | `/api/backtest/<symbol>` | **Backtest results for symbol (JSON)** |
 | `GET` | `/api/portfolio` | **Open positions with live P&L** (auth required, JSON) |

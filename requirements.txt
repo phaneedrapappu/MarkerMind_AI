@@ -36,6 +36,7 @@ apscheduler==3.10.4
 
 # Environment variables
 python-dotenv==1.0.1
+holidays>=0.50
 
 # Testing
 pytest==7.4.4
