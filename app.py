@@ -22,7 +22,7 @@ import json
 import os
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,6 +49,11 @@ from src.stock_discovery import get_catalog_grouped, search_stocks, fetch_all_ns
 from src.email_utils import send_welcome_email, send_update_email, send_unsubscribe_lookup_email
 from src.technical.indicators import get_indicators
 from src.telegram_utils import send_pipeline_alerts
+
+try:
+    import holidays as pyholidays
+except Exception:
+    pyholidays = None
 
 # Same catalog as main.py so the dashboard can offer stock discovery
 _NSE_STOCK_CATALOG = {
@@ -117,6 +122,10 @@ _db: DatabaseManager = None
 _pipeline_lock = threading.Lock()
 _pipeline_running = False
 
+_IST = ZoneInfo("Asia/Kolkata")
+_NSE_OPEN = time(9, 15)
+_NSE_CLOSE = time(15, 30)
+
 
 def get_db() -> DatabaseManager:
     global _db
@@ -127,6 +136,78 @@ def get_db() -> DatabaseManager:
         db_path = cfg.get("database", {}).get("path", "data/marketmind.db")
         _db = DatabaseManager(db_path)
     return _db
+
+
+def _public_holiday_name(day):
+    """Return India public holiday name for the given date, if available."""
+    if pyholidays is None:
+        return None
+    try:
+        holiday_map = pyholidays.India(years=[day.year])
+        return holiday_map.get(day)
+    except Exception:
+        return None
+
+
+def _next_market_open(now_ist, max_days=14):
+    """Find the next market opening datetime in IST."""
+    # Same day, before opening bell
+    if now_ist.weekday() < 5 and not _public_holiday_name(now_ist.date()) and now_ist.time() < _NSE_OPEN:
+        return now_ist.replace(hour=_NSE_OPEN.hour, minute=_NSE_OPEN.minute, second=0, microsecond=0)
+
+    start_day = now_ist.date() + timedelta(days=1)
+    for offset in range(max_days):
+        day = start_day + timedelta(days=offset)
+        if day.weekday() >= 5:
+            continue
+        if _public_holiday_name(day):
+            continue
+        return datetime.combine(day, _NSE_OPEN, tzinfo=_IST)
+    return None
+
+
+def get_market_status(now_ist=None):
+    """Return current NSE market status with holiday/closure context."""
+    now_ist = now_ist or datetime.now(_IST)
+    day = now_ist.date()
+    reason = None
+    is_holiday = False
+
+    public_holiday = _public_holiday_name(day)
+    if now_ist.weekday() >= 5:
+        is_open = False
+        is_holiday = True
+        reason = "Weekend"
+    elif public_holiday:
+        is_open = False
+        is_holiday = True
+        reason = f"Public holiday: {public_holiday}"
+    elif now_ist.time() < _NSE_OPEN:
+        is_open = False
+        reason = "Pre-market"
+    elif now_ist.time() > _NSE_CLOSE:
+        is_open = False
+        reason = "Post-market"
+    else:
+        is_open = True
+        reason = "Regular market hours"
+
+    next_open_dt = _next_market_open(now_ist)
+    next_open_human = next_open_dt.strftime("%a, %d %b %Y · %I:%M %p IST") if next_open_dt else None
+
+    return {
+        "is_open": is_open,
+        "is_holiday": is_holiday,
+        "reason": reason,
+        "timestamp_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
+        "next_open": next_open_dt.isoformat() if next_open_dt else None,
+        "next_open_human": next_open_human,
+    }
+
+
+@app.context_processor
+def inject_market_status():
+    return {"market_status": get_market_status()}
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
@@ -293,6 +374,11 @@ def api_run_pipeline():
 @app.route("/api/pipeline/status")
 def api_pipeline_status():
     return jsonify({"running": _pipeline_running})
+
+
+@app.route("/api/market/status")
+def api_market_status():
+    return jsonify(get_market_status())
 
 
 @app.route("/api/stocks")
