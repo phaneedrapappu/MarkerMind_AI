@@ -137,7 +137,11 @@ async function runScreener() {
   const tbody = document.getElementById('screenerBody');
 
   if (!data.results.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No stocks match the selected criteria.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">'
+      + (data.count === 0 && !data.filtered
+        ? 'No stock data yet — <a href="#" onclick="openRunModal();return false">run the AI pipeline</a> first to populate indicators.'
+        : 'No stocks match the selected criteria.')
+      + '</td></tr>';
     return;
   }
 

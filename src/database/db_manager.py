@@ -468,6 +468,7 @@ class DatabaseManager:
                 sess.commit()
                 result = self._to_dict(existing)
                 result["is_new"] = False
+                result["unsubscribe_token"] = existing.unsubscribe_token  # needed to build unsubscribe URL
                 return result
             record = SubscriberRecord(
                 email=email,
@@ -479,6 +480,7 @@ class DatabaseManager:
             sess.commit()
             result = self._to_dict(record)
             result["is_new"] = True
+            result["unsubscribe_token"] = record.unsubscribe_token  # needed to build unsubscribe URL
             return result
 
     def get_active_subscribers(self) -> List[Dict[str, Any]]:

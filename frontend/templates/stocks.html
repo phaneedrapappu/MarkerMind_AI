@@ -265,15 +265,22 @@ async function loadTrending() {
     const d = await r.json();
     const el = document.getElementById('trendingList');
     if (!d.length) {
-      el.innerHTML = '<div class="empty-state"><i class="bi bi-fire"></i>No signals yet. Run the AI pipeline first.</div>';
+      el.innerHTML = '<div class="empty-state"><i class="bi bi-fire"></i>No trending data available right now.</div>';
       return;
+    }
+    const isDefault = d.some(s => s.is_default);
+    if (isDefault) {
+      el.insertAdjacentHTML('beforebegin',
+        '<div class="alert alert-info py-1 mb-2" style="font-size:12px">'
+        + '<i class="bi bi-info-circle"></i> Showing popular NSE stocks. '
+        + '<a href="#" onclick="openRunModal();return false">Run the AI pipeline</a> to see live signals.</div>');
     }
     el.innerHTML = `
     <table class="mm-data-table">
-      <thead><tr><th>#</th><th>Symbol</th><th>AI Signal</th><th>Confidence</th><th>Risk</th><th>Activity</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Symbol</th><th>Signal</th><th>Confidence</th><th>Risk</th><th>Activity</th><th></th></tr></thead>
       <tbody>${d.map((s, i) => {
-        const sigClass = s.signal_type === 'BUY' ? 'sig-buy' : s.signal_type === 'SELL' ? 'sig-sell' : 'sig-hold';
-        const sigIcon  = s.signal_type === 'BUY' ? '📈' : s.signal_type === 'SELL' ? '📉' : '⏸';
+        const sigClass = s.signal_type === 'BUY' ? 'sig-buy' : s.signal_type === 'SELL' ? 'sig-sell' : s.signal_type === 'WATCH' ? 'sig-hold' : 'sig-hold';
+        const sigIcon  = s.signal_type === 'BUY' ? '📈' : s.signal_type === 'SELL' ? '📉' : s.signal_type === 'WATCH' ? '👁' : '⏸';
         const conf     = Math.round(s.confidence * 100);
         const barClass = s.signal_type === 'BUY' ? 'buy' : s.signal_type === 'SELL' ? 'sell' : '';
         return `<tr class="mm-table-row" onclick="window.location='/stock/${s.symbol}'">
@@ -282,17 +289,20 @@ async function loadTrending() {
           <td><span class="${sigClass}">${sigIcon} ${s.signal_type}</span></td>
           <td>
             <div class="d-flex align-items-center gap-2">
-              <div class="mm-conf-bar-wrap"><div class="mm-conf-bar ${barClass}" style="width:${conf}%"></div></div>
-              <span style="font-size:12px">${conf}%</span>
+              <div class="mm-conf-bar-wrap"><div class="mm-conf-bar ${barClass}" style="width:${conf || 0}%"></div></div>
+              <span style="font-size:12px">${s.is_default ? '—' : conf + '%'}</span>
             </div>
           </td>
           <td><span class="text-muted small">${s.risk_level || '—'}</span></td>
           <td>
             <div class="mm-activity-dots">
-              ${Array.from({length: Math.min(s.signal_count, 5)}).map(() =>
-                '<div class="mm-dot active"></div>').join('')}
-              ${Array.from({length: Math.max(0, 5 - s.signal_count)}).map(() =>
-                '<div class="mm-dot"></div>').join('')}
+              ${s.is_default
+                ? '<span class="text-muted" style="font-size:11px">no data yet</span>'
+                : Array.from({length: Math.min(s.signal_count, 5)}).map(() =>
+                    '<div class="mm-dot active"></div>').join('')
+                  + Array.from({length: Math.max(0, 5 - s.signal_count)}).map(() =>
+                    '<div class="mm-dot"></div>').join('')
+              }
             </div>
           </td>
           <td><a href="/stock/${s.symbol}" class="mm-btn-outline-sm" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation()">View →</a></td>
@@ -313,17 +323,29 @@ async function loadSectors() {
     const d = await r.json();
     const el = document.getElementById('sectorsGrid');
     if (!d.length) {
-      el.innerHTML = '<div class="empty-state"><i class="bi bi-grid-3x3-gap"></i>Run AI pipeline to see sector leaders.</div>';
+      el.innerHTML = '<div class="empty-state"><i class="bi bi-grid-3x3-gap"></i>No sector data available right now.</div>';
       return;
     }
-    el.innerHTML = d.map(s => `
+    const isSectorDefault = d.some(s => s.is_default);
+    if (isSectorDefault) {
+      el.insertAdjacentHTML('beforebegin',
+        '<div class="alert alert-info py-1 mb-2" style="font-size:12px">'
+        + '<i class="bi bi-info-circle"></i> Showing representative stocks per sector. '
+        + '<a href="#" onclick="openRunModal();return false">Run the AI pipeline</a> for BUY/SELL signals.</div>');
+    }
+    el.innerHTML = d.map(s => {
+      const sigClass = s.signal_type === 'BUY' ? 'sig-buy' : s.signal_type === 'SELL' ? 'sig-sell' : 'sig-hold';
+      const sigIcon  = s.signal_type === 'BUY' ? '📈' : s.signal_type === 'SELL' ? '📉' : '👁';
+      const confText = s.is_default ? '' : `<div class="mm-conf-pill">${Math.round(s.confidence * 100)}% conf</div>`;
+      return `
       <a href="/stock/${s.symbol}" class="mm-sector-card text-decoration-none">
         <div class="mm-sector-card-header">${s.sector}</div>
         <div class="mm-sector-sym">${s.symbol}</div>
-        <div class="mt-1"><span class="sig-buy">📈 BUY</span></div>
-        <div class="mm-conf-pill">${Math.round(s.confidence * 100)}% conf</div>
+        <div class="mt-1"><span class="${sigClass}">${sigIcon} ${s.signal_type}</span></div>
+        ${confText}
         <div class="text-muted" style="font-size:11px;margin-top:4px">${s.risk_level || ''}</div>
-      </a>`).join('');
+      </a>`;
+    }).join('');
   } catch {
     document.getElementById('sectorsGrid').innerHTML =
       '<div class="empty-state text-muted">Failed to load sector data.</div>';
