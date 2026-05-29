@@ -210,6 +210,145 @@ def inject_market_status():
     return {"market_status": get_market_status()}
 
 
+# ── Live news fallback (used when DB is empty on first run) ───────────────────
+def _fetch_live_news_and_save(db: "DatabaseManager") -> list:
+    """
+    Fetch fresh news directly from RSS feeds without running the full pipeline.
+    Saves results to DB so subsequent calls are instant.
+    Called automatically when the DB has no news yet.
+    """
+    import re
+    import feedparser
+    from datetime import timedelta
+
+    ET_MARKETS_RSS = "https://economictimes.indiatimes.com/markets/rss.cms"
+    MONEYCONTROL_RSS = "https://www.moneycontrol.com/rssfeeds/marketsnews.xml"
+    LIVE_FEEDS = [
+        (ET_MARKETS_RSS, None),
+        (MONEYCONTROL_RSS, None),
+    ]
+
+    POSITIVE_KW = ["rally","surge","gain","bull","profit","growth","strong","beat","upgrade","buy","outperform","record high"]
+    NEGATIVE_KW = ["fall","drop","crash","bear","loss","weak","miss","downgrade","sell","underperform","record low","breakdown"]
+
+    def _sentiment(text):
+        t = text.lower()
+        p = sum(1 for k in POSITIVE_KW if k in t)
+        n = sum(1 for k in NEGATIVE_KW if k in t)
+        return "POSITIVE" if p > n else "NEGATIVE" if n > p else "NEUTRAL"
+
+    articles = []
+    seen_urls = set()
+    cutoff = datetime.now() - timedelta(hours=48)
+
+    for url, symbol in LIVE_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            source = getattr(feed.feed, "title", url.split("/")[2])
+            for entry in feed.entries[:15]:
+                link = getattr(entry, "link", "")
+                if not link or link in seen_urls:
+                    continue
+                pub = datetime.now()
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    try:
+                        pub = datetime(*entry.published_parsed[:6])
+                    except Exception:
+                        pass
+                if pub < cutoff:
+                    continue
+                title = getattr(entry, "title", "").strip()
+                summary = re.sub(r"<[^>]+>", " ", getattr(entry, "summary", "") or "").strip()
+                articles.append({
+                    "symbol": symbol,
+                    "title": title[:499],
+                    "summary": summary[:2000],
+                    "url": link[:999],
+                    "source": source[:99],
+                    "published_at": pub,
+                    "sentiment": _sentiment(f"{title} {summary}"),
+                })
+                seen_urls.add(link)
+        except Exception as e:
+            app.logger.warning(f"Live news fallback feed error ({url}): {e}")
+
+    if articles:
+        try:
+            db.save_news(articles)
+        except Exception as e:
+            app.logger.warning(f"Live news fallback save error: {e}")
+
+    return articles
+
+
+def _fetch_live_global_news_and_save(db: "DatabaseManager") -> list:
+    """
+    Fetch global market news from RSS on first run when DB is empty.
+    """
+    import re
+    import feedparser
+    from datetime import timedelta
+
+    GLOBAL_SYMBOL = "__GLOBAL__"
+    GLOBAL_FEEDS = [
+        ("https://news.google.com/rss/search?q=India+stock+market+NSE&hl=en-IN&gl=IN&ceid=IN:en", GLOBAL_SYMBOL),
+        ("https://news.google.com/rss/search?q=crude+oil+price+India&hl=en-IN&gl=IN&ceid=IN:en", GLOBAL_SYMBOL),
+        ("https://news.google.com/rss/search?q=USD+INR+exchange+rate&hl=en-IN&gl=IN&ceid=IN:en", GLOBAL_SYMBOL),
+    ]
+
+    POSITIVE_KW = ["rally","surge","gain","bull","profit","growth","strong","beat"]
+    NEGATIVE_KW = ["fall","drop","crash","bear","loss","weak","miss","downgrade"]
+
+    def _sentiment(text):
+        t = text.lower()
+        p = sum(1 for k in POSITIVE_KW if k in t)
+        n = sum(1 for k in NEGATIVE_KW if k in t)
+        return "POSITIVE" if p > n else "NEGATIVE" if n > p else "NEUTRAL"
+
+    articles = []
+    seen_urls = set()
+    cutoff = datetime.now() - timedelta(hours=48)
+
+    for url, symbol in GLOBAL_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            source = getattr(feed.feed, "title", url.split("/")[2])
+            for entry in feed.entries[:10]:
+                link = getattr(entry, "link", "")
+                if not link or link in seen_urls:
+                    continue
+                pub = datetime.now()
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    try:
+                        pub = datetime(*entry.published_parsed[:6])
+                    except Exception:
+                        pass
+                if pub < cutoff:
+                    continue
+                title = getattr(entry, "title", "").strip()
+                summary = re.sub(r"<[^>]+>", " ", getattr(entry, "summary", "") or "").strip()
+                articles.append({
+                    "symbol": symbol,
+                    "title": title[:499],
+                    "summary": summary[:2000],
+                    "url": link[:999],
+                    "source": source[:99],
+                    "published_at": pub,
+                    "sentiment": _sentiment(f"{title} {summary}"),
+                })
+                seen_urls.add(link)
+        except Exception as e:
+            app.logger.warning(f"Live global news fallback error ({url}): {e}")
+
+    if articles:
+        try:
+            db.save_news(articles)
+        except Exception as e:
+            app.logger.warning(f"Live global news fallback save error: {e}")
+
+    return articles
+
+
 # ── Pages ──────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -219,6 +358,9 @@ def dashboard():
     signals = db.get_latest_signals(10)
     signals_all = db.get_latest_signals(100)
     news = db.get_news(limit=10)
+    # Auto-fetch live news on first run so dashboard isn't empty
+    if not news:
+        news = _fetch_live_news_and_save(db)[:10]
     alerts = db.get_recent_alerts(5)
     return render_template(
         "dashboard.html",
@@ -285,6 +427,9 @@ def api_news():
     symbol = request.args.get("symbol")
     db = get_db()
     data = db.get_news(symbol=symbol.upper() if symbol else None, limit=limit)
+    # Auto-fetch live from RSS on first run when DB has no news
+    if not data and not symbol:
+        data = _fetch_live_news_and_save(db)[:limit]
     return jsonify(data)
 
 
@@ -619,7 +764,11 @@ def api_news_global():
     """Return world/global market news (tagged __GLOBAL__ by NewsAgent)."""
     limit = int(request.args.get("limit", 30))
     db = get_db()
-    return jsonify(db.get_global_news(limit=limit))
+    data = db.get_global_news(limit=limit)
+    # Auto-fetch live global news on first run when DB is empty
+    if not data:
+        data = _fetch_live_global_news_and_save(db)[:limit]
+    return jsonify(data)
 
 
 # ── News-based AI stock suggestions ───────────────────────────────────────────
@@ -652,10 +801,15 @@ def api_news_suggestions():
     # Fetch recent Indian market + global news
     indian_news = db.get_news(limit=20)
     global_news = db.get_global_news(limit=15)
+    # Auto-fetch live on first run so suggestions work immediately
+    if not indian_news:
+        indian_news = _fetch_live_news_and_save(db)[:20]
+    if not global_news:
+        global_news = _fetch_live_global_news_and_save(db)[:15]
     all_news = indian_news + global_news
 
     if not all_news:
-        return jsonify({"error": "No news in database yet. Run the pipeline first."}), 404
+        return jsonify({"error": "Could not fetch news. Check your internet connection."}), 503
 
     headlines = []
     for n in all_news[:35]:
@@ -974,7 +1128,8 @@ def api_stocks_movers():
 
 @app.route("/api/stocks/trending")
 def api_stocks_trending():
-    """Most active stocks based on DB signals + news (no external call)."""
+    """Most active stocks based on DB signals + news (no external call).
+    Falls back to a curated default list on first run."""
     db = get_db()
     signals = db.get_latest_signals(50)
     from collections import Counter
@@ -990,12 +1145,20 @@ def api_stocks_trending():
             "risk_level": sig.get("risk_level", ""),
             "signal_date": sig.get("signal_date", ""),
         })
+    # First-run fallback: return popular Nifty stocks so the page isn't empty
+    if not trending:
+        DEFAULT_TRENDING = ["TCS","RELIANCE","HDFCBANK","INFY","ICICIBANK",
+                            "SBIN","BAJFINANCE","WIPRO","SUNPHARMA","TITAN"]
+        trending = [{"symbol": s, "signal_count": 0, "signal_type": "WATCH",
+                     "confidence": 0, "risk_level": "", "signal_date": "",
+                     "is_default": True} for s in DEFAULT_TRENDING]
     return jsonify(trending)
 
 
 @app.route("/api/stocks/sector-leaders")
 def api_sector_leaders():
-    """Best BUY signal per sector from DB."""
+    """Best BUY signal per sector from DB.
+    Falls back to top stock per sector on first run."""
     db = get_db()
     signals = db.get_latest_signals(100)
     sector_map = {}
@@ -1009,6 +1172,13 @@ def api_sector_leaders():
                 "symbol": best["symbol"], "signal_type": best["signal_type"],
                 "confidence": best.get("confidence", 0), "sector": sector,
                 "risk_level": best.get("risk_level", ""),
+            }
+        else:
+            # First-run fallback: show top stock per sector with WATCH signal
+            sector_map[sector] = {
+                "symbol": tickers[0], "signal_type": "WATCH",
+                "confidence": 0, "sector": sector,
+                "risk_level": "", "is_default": True,
             }
     return jsonify(list(sector_map.values()))
 
@@ -1188,7 +1358,11 @@ def api_screener():
     results = []
     for sym in candidates:
         try:
-            ind = _cached_indicators(sym, db_history=db.get_recent_stock_data(sym, limit=200))
+            # Skip symbols with no DB history on first run to prevent yfinance hang
+            db_history = db.get_recent_stock_data(sym, limit=200)
+            if not db_history:
+                continue
+            ind = _cached_indicators(sym, db_history=db_history)
             if ind.get("error"):
                 continue
             rsi = ind.get("rsi", {}).get("value")
@@ -1225,7 +1399,9 @@ def api_screener():
         except Exception:
             continue
 
-    return jsonify({"results": results, "count": len(results)})
+    filtered = bool(signal_filter or risk_filter or macd_trend
+                    or min_conf > 0 or rsi_min > 0 or rsi_max < 100 or sector)
+    return jsonify({"results": results, "count": len(results), "filtered": filtered})
 
 
 # ── Backtesting ───────────────────────────────────────────────────────────────
@@ -1517,7 +1693,13 @@ def api_telegram_subscribe_link():
         return jsonify({"error": "Could not resolve bot username from Telegram API."}), 503
     token = get_db().generate_telegram_link_token(int(current_user.id))
     link = f"https://t.me/{username}?start={token}"
-    return jsonify({"link": link, "bot_username": username})
+    return jsonify({
+        "link": link,
+        "bot_username": username,
+        "start_token": token,
+        "start_command": f"/start {token}",
+        "web_login_url": "https://web.telegram.org/",
+    })
 
 
 @app.route("/api/telegram/webhook", methods=["POST"])

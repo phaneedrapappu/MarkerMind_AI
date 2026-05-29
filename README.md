@@ -73,6 +73,8 @@ Flask Dashboard        →  Mobile-first browser UI (auth, portfolio, screener)
 - Gmail account with an [App Password](https://myaccount.google.com/apppasswords) for email alerts
 - A Telegram bot token from [@BotFather](https://t.me/BotFather) *(optional, for mobile alerts)*
 
+> **Full system requirements & platform-specific setup?** See [SYSTEM_REQUIREMENTS.md](SYSTEM_REQUIREMENTS.md) for Windows, macOS, Linux, and troubleshooting.
+
 ### 2. Install
 
 ```bash

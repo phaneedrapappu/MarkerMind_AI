@@ -309,25 +309,63 @@ async function subscribeTelegram() {
   try {
     const d = await (await fetch('/api/telegram/subscribe-link')).json();
     if (d.link) {
-      // Open Telegram deep-link in a new tab
-      window.open(d.link, '_blank');
+      // Try opening the deep-link; browser may block window.open after async – show manual link too
+      const opened = window.open(d.link, '_blank');
+      const manualCommand = d.start_command || '';
+      const botUsername = d.bot_username || '';
       document.getElementById('tgStatus').innerHTML =
-        '<span class="text-info">📲 Telegram opened. Press <strong>Start</strong> in the bot chat. ' +
-        'This page will refresh in 10 s to confirm.</span>';
-      // Auto-confirm after 10 seconds
-      setTimeout(async () => {
-        const s = await (await fetch('/api/telegram/status')).json();
-        if (s.linked) {
-          document.getElementById('tgUnlinked').style.display = 'none';
-          document.getElementById('tgLinked').style.display = 'block';
-        } else {
+        `<div class="d-flex flex-column gap-2 mt-1">
+           <span class="text-info">📲 Press <strong>Start</strong> in the Telegram bot chat to activate alerts.</span>
+           ${!opened ? '<span class="text-warning small">⚠ Popup was blocked — use the buttons below.</span>' : ''}
+           <span class="text-muted small">If Telegram shows <strong>open xdg-open</strong>, that is your browser trying to launch the Telegram app. If it does not continue, use Telegram Web and paste the command below.</span>
+           <div class="d-flex gap-2 flex-wrap">
+             <a href="${d.link}" target="_blank" rel="noopener" class="mm-btn-primary" style="font-size:13px;padding:6px 14px;text-decoration:none">
+               <i class="bi bi-telegram me-1"></i>Open Telegram
+             </a>
+             <a href="${d.web_login_url || 'https://web.telegram.org/'}" target="_blank" rel="noopener" class="mm-btn-outline-sm" style="font-size:12px;padding:6px 12px;text-decoration:none">
+               <i class="bi bi-browser-chrome me-1"></i>Open Telegram Web
+             </a>
+           </div>
+           <div class="p-2 rounded" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08)">
+             <div class="text-muted small mb-1">Manual fallback:</div>
+             <div class="small">1. Open Telegram Web and sign in</div>
+             <div class="small">2. Search for <strong>@${botUsername}</strong></div>
+             <div class="small">3. Send this command:</div>
+             <div class="d-flex gap-2 flex-wrap align-items-center mt-2">
+               <code style="user-select:all;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,0.25)">${manualCommand}</code>
+               <button type="button" class="mm-btn-outline-sm" onclick="navigator.clipboard && navigator.clipboard.writeText('${manualCommand}')">
+                 <i class="bi bi-clipboard me-1"></i>Copy Command
+               </button>
+             </div>
+           </div>
+           <span class="text-muted small">After you press Start, this page will keep checking for up to 60 seconds.</span>
+         </div>`;
+      // Poll for up to 60 seconds because the user may take a few moments to press Start.
+      let attempts = 0;
+      const maxAttempts = 20;
+      const poll = setInterval(async () => {
+        attempts += 1;
+        try {
+          const s = await (await fetch('/api/telegram/status')).json();
+          if (s.linked) {
+            clearInterval(poll);
+            document.getElementById('tgStatus').innerHTML =
+              '<span class="text-success">✅ Telegram linked successfully.</span>';
+            document.getElementById('tgUnlinked').style.display = 'none';
+            document.getElementById('tgLinked').style.display = 'block';
+            return;
+          }
+        } catch (e) {}
+
+        if (attempts >= maxAttempts) {
+          clearInterval(poll);
           document.getElementById('tgStatus').innerHTML =
             '<span class="text-muted">Not detected yet — please press Start in Telegram, then ' +
-            '<a href="" onclick="location.reload()">refresh this page</a>.</span>';
+            '<a href="" onclick="location.reload()">refresh this page</a> or try Subscribe again.</span>';
           btn.disabled = false;
           btn.innerHTML = '<i class="bi bi-telegram me-2"></i>Subscribe to Alerts';
         }
-      }, 10000);
+      }, 3000);
     } else {
       document.getElementById('tgStatus').innerHTML = `<span class="text-danger">${d.error}</span>`;
       btn.disabled = false;
