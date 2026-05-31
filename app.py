@@ -24,7 +24,10 @@ import sys
 import threading
 from datetime import datetime, timedelta, time
 from pathlib import Path
-from zoneinfo import ZoneInfo
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 import hashlib
 import hmac
@@ -1408,6 +1411,48 @@ def _start_scheduler():
             "Run: pip install apscheduler"
         )
         return None
+
+
+# ── Auto news fetch ───────────────────────────────────────────────────────────
+_news_fetch_lock = threading.Lock()
+_news_fetch_running = False
+
+def _auto_fetch_news(force: bool = False):
+    """
+    Run the NewsAgent in a background thread to populate market and global news.
+    Called on startup and whenever news is empty / stale.
+    No stock-specific news is fetched here — only Indian market + global feeds.
+    """
+    global _news_fetch_running
+    if not _news_fetch_lock.acquire(blocking=False):
+        return  # already running
+    _news_fetch_running = True
+
+    def _run():
+        global _news_fetch_running
+        try:
+            import yaml
+            with open(CONFIG_PATH) as f:
+                cfg = yaml.safe_load(f)
+            db_path = cfg.get("database", {}).get("path", "data/marketmind.db")
+            from src.database.db_manager import DatabaseManager
+            from src.agents.news_agent import NewsAgent
+            db = DatabaseManager(db_path)
+            news_cfg = cfg.get("agents", {}).get("news_agent", {})
+            # Fetch general market + global feeds only (no per-stock RSS)
+            news_cfg["stocks"] = []
+            agent = NewsAgent(news_cfg, db)
+            if agent.initialize():
+                articles = agent.execute()
+                app.logger.info(f"[AutoNews] Fetched {len(articles)} articles")
+            agent.cleanup()
+        except Exception as exc:
+            app.logger.warning(f"[AutoNews] Failed: {exc}")
+        finally:
+            _news_fetch_running = False
+            _news_fetch_lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

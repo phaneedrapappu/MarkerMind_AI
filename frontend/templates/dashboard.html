@@ -91,7 +91,7 @@
               <td>
                 <div style="display:flex;align-items:center;gap:6px">
                   <div style="width:40px;height:5px;background:var(--bg-surface);border-radius:99px;overflow:hidden">
-                    <div style="width:{{ (s.confidence*100)|int }}%;height:100%;background:var(--green);border-radius:99px"></div>
+                    <div class="conf-bar" data-pct="{{ (s.confidence*100)|int }}" style="height:100%;background:var(--green);border-radius:99px"></div>
                   </div>
                   <span class="text-dim" style="font-size:12px">{{ "%.0f"|format(s.confidence * 100) }}%</span>
                 </div>
@@ -133,7 +133,7 @@
         </div>
       </div>
       <div class="mm-card-body p0" style="flex:1;overflow-y:auto;overflow-x:hidden;">
-        <!-- Indian news -->
+        <!-- Indian news (populated via JS / AJAX for live retry support) -->
         <div id="newsIndian">
           {% if news %}
             {% for n in news %}
@@ -248,11 +248,12 @@
 {% endblock %}
 
 {% block scripts %}
+<script id="signals-data" type="application/json">{{ signals_all | tojson }}</script>
 <script>
 // Signal doughnut chart — built from server-side data (same source as table)
 (function() {
-  const _allSignals = {{ signals_all | tojson }};
-  const counts = {BUY:0, SELL:0, HOLD:0};
+  const _allSignals = JSON.parse(document.getElementById('signals-data').textContent);
+  const counts = {BUY: 0, SELL: 0, HOLD: 0};
   _allSignals.forEach(s => { if (counts[s.signal_type] !== undefined) counts[s.signal_type]++; });
   const canvas = document.getElementById('signalDistChart');
   new Chart(canvas, {
@@ -282,6 +283,11 @@
   });
 })();
 
+// Apply data-pct widths for confidence bars (avoids Jinja2 in inline CSS)
+document.querySelectorAll('.conf-bar').forEach(function(el) {
+  el.style.width = (el.dataset.pct || 0) + '%';
+});
+
 // News tab switching
 let globalNewsLoaded = false;
 function switchNewsTab(tab) {
@@ -293,11 +299,59 @@ function switchNewsTab(tab) {
   if (isGlobal && !globalNewsLoaded) loadGlobalNews();
 }
 
+function _newsItemHtml(n, showSymbol) {
+  const title = (n.title||'').slice(0,100) + (n.title&&n.title.length>100?'…':'');
+  const dotCls = n.sentiment==='POSITIVE'?'dot-pos':n.sentiment==='NEGATIVE'?'dot-neg':'dot-neu';
+  const sym = n.symbol && n.symbol!=='__GLOBAL__' ? `<strong>${n.symbol}</strong> · ` : '';
+  const date = (n.published_at||'').slice(0,10);
+  return `<div class="mm-news-item">
+    <div class="mm-news-dot ${dotCls}"></div>
+    <div style="min-width:0">
+      <div class="mm-news-title"><a href="${n.url}" target="_blank" rel="noopener">${title}</a></div>
+      <div class="mm-news-meta">${sym}${n.source||''} · ${date}</div>
+    </div>
+  </div>`;
+}
+
+// Indian news — loaded via AJAX so we can auto-retry when DB is being populated
+let _indianNewsRetryTimer = null;
+function loadIndianNews(retryCount) {
+  retryCount = retryCount || 0;
+  fetch('/api/news?limit=15')
+    .then(r => {
+      if (r.status === 202) return r.json().then(d => ({fetching: true}));
+      return r.json().then(d => Array.isArray(d) ? {items: d} : {items: []});
+    })
+    .then(result => {
+      const container = document.getElementById('newsIndian');
+      if (result.fetching || (result.items && result.items.length === 0)) {
+        // News is being fetched — show spinner and retry
+        container.innerHTML = `<div class="text-muted small text-center py-4">
+          <span class="spinner-border spinner-border-sm me-2"></span>Fetching latest market news…
+        </div>`;
+        if (retryCount < 12) {  // retry up to 12 times (60 seconds total)
+          _indianNewsRetryTimer = setTimeout(() => loadIndianNews(retryCount + 1), 5000);
+        } else {
+          container.innerHTML = '<div class="empty-state"><i class="bi bi-newspaper"></i>No news available. Click Run Analysis to fetch.</div>';
+        }
+        return;
+      }
+      if (_indianNewsRetryTimer) { clearTimeout(_indianNewsRetryTimer); _indianNewsRetryTimer = null; }
+      container.innerHTML = result.items.map(n => _newsItemHtml(n)).join('');
+    })
+    .catch(() => {
+      // Keep server-side rendered content on error
+    });
+}
+
 function loadGlobalNews() {
   globalNewsLoaded = true;
   fetch('/api/news/global?limit=20')
-    .then(r => r.json())
-    .then(articles => {
+    .then(r => {
+      if (r.status === 202) return {fetching: true};
+      return r.json().then(d => Array.isArray(d) ? {items: d} : {fetching: true});
+    })
+    .then(result => {
       const container = document.getElementById('globalNewsList');
       const loading = document.getElementById('globalNewsLoading');
       if (loading) loading.style.display = 'none';
@@ -306,19 +360,7 @@ function loadGlobalNews() {
         setTimeout(() => { globalNewsLoaded = false; loadGlobalNews(); }, 20000);
         return;
       }
-      container.innerHTML = articles.map(n => `
-        <div class="mm-news-item">
-          <div class="mm-news-dot ${n.sentiment==='POSITIVE'?'dot-pos':n.sentiment==='NEGATIVE'?'dot-neg':'dot-neu'}"></div>
-          <div style="min-width:0">
-            <div class="mm-news-title">
-              <a href="${n.url}" target="_blank" rel="noopener">
-                ${(n.title||'').slice(0,100)}${n.title&&n.title.length>100?'…':''}
-              </a>
-            </div>
-            <div class="mm-news-meta">${n.source||'Global'} · ${(n.published_at||'').slice(0,10)}</div>
-          </div>
-        </div>
-      `).join('');
+      container.innerHTML = result.items.map(n => _newsItemHtml(n)).join('');
     })
     .catch(() => {
       document.getElementById('globalNewsLoading').innerHTML = '<span class="text-muted small">Failed to load global news</span>';
@@ -360,8 +402,6 @@ function loadSuggestions(isAutoLoad) {
         const errStr = (data.error + (data.message || '')).toLowerCase();
         const is503  = errStr.includes('503') || errStr.includes('high demand') || errStr.includes('unavailable');
         const is403  = data.error === 'permission_denied' || errStr.includes('403') || errStr.includes('permission');
-        const emptyEl = document.getElementById('suggEmpty');
-        emptyEl.style.display = 'block';
         if (is403) {
           emptyEl.innerHTML =
             `<i class="bi bi-key" style="color:#f59e0b;font-size:1.4rem"></i>
@@ -487,6 +527,8 @@ function loadSuggestions(isAutoLoad) {
 
 // Auto-load AI news suggestions on page load (marked as auto so 503 triggers retry)
 document.addEventListener('DOMContentLoaded', () => {
+  // Always refresh Indian news via AJAX (handles empty DB on first run)
+  loadIndianNews(0);
   setTimeout(() => loadSuggestions(true), 1500);
 });
 </script>
