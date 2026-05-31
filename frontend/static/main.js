@@ -14,7 +14,7 @@ function toggleTheme() {
   if (icon) icon.className = saved === 'light' ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
 })();
 
-function showToast(msg, type = 'info') {
+function showToast(msg, type = 'info', duration = 3500) {
   const icons = { success: '✅', error: '❌', info: 'ℹ️', warn: '⚠️' };
   const el = document.createElement('div');
   el.className = 'mm-toast';
@@ -22,7 +22,7 @@ function showToast(msg, type = 'info') {
   const c = document.getElementById('toastContainer');
   if (c) {
     c.appendChild(el);
-    setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity .4s'; setTimeout(()=>el.remove(),400); }, 3500);
+    setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity .4s'; setTimeout(()=>el.remove(),400); }, duration);
   }
 }
 
@@ -287,6 +287,11 @@ async function launchPipeline() {
       return;
     }
     const data = await res.json();
+    if (res.status === 400 && data.setup_required) {
+      setBadge('error', 'Not configured');
+      showToast(data.error, 'error', 8000);
+      return;
+    }
     if (data.status === 'started') { showToast('Pipeline started', 'success'); pollPipelineStatus(); }
     else if (data.status === 'already_running') { showToast('Already running', 'warn'); pollPipelineStatus(); }
     else { setBadge('error','Error'); showToast(data.error || 'Failed to start', 'error'); }
@@ -299,9 +304,14 @@ function pollPipelineStatus() {
       const d = await fetch('/api/pipeline/status').then(r=>r.json());
       if (!d.running) {
         clearInterval(iv);
-        setBadge('done','Done ✓');
-        showToast('Analysis complete – refreshing…', 'success');
-        setTimeout(()=>location.reload(), 2000);
+        if (d.last_error) {
+          setBadge('error', 'Failed');
+          showToast('Pipeline error: ' + d.last_error, 'error', 10000);
+        } else {
+          setBadge('done','Done ✓');
+          showToast('Analysis complete – refreshing…', 'success');
+          setTimeout(()=>location.reload(), 2000);
+        }
       }
     } catch { clearInterval(iv); setBadge('idle','Idle'); }
   }, 3000);

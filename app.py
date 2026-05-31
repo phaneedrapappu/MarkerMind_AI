@@ -121,6 +121,7 @@ CONFIG_PATH = str(ROOT / "config" / "config.yaml")
 _db: DatabaseManager = None
 _pipeline_lock = threading.Lock()
 _pipeline_running = False
+_pipeline_last_error: str = ""  # stores the last pipeline error message
 
 _IST = ZoneInfo("Asia/Kolkata")
 _NSE_OPEN = time(9, 15)
@@ -466,7 +467,22 @@ def api_run_pipeline():
         "email":  ["you@gmail.com"]          // override recipients
       }
     """
-    global _pipeline_running
+    global _pipeline_running, _pipeline_last_error
+
+    # Pre-flight: check the LLM API key is configured before starting a long run
+    provider = os.getenv("LLM_PROVIDER", "claude").lower()
+    key_map = {"claude": "CLAUDE_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+    llm_key = os.getenv(key_map.get(provider, "CLAUDE_API_KEY"), "")
+    bad_placeholders = {"your-claude-api-key-here", "your-gemini-api-key-here",
+                        "sk-your-openai-api-key-here", ""}
+    if llm_key in bad_placeholders:
+        env_var = key_map.get(provider, "CLAUDE_API_KEY")
+        return jsonify({
+            "status": "error",
+            "error": f"{env_var} is not configured. Open your .env file and add your {provider.title()} API key.",
+            "setup_required": True,
+        }), 400
+
     if not _pipeline_lock.acquire(blocking=False):
         return jsonify({"status": "already_running"}), 409
 
@@ -491,23 +507,35 @@ def api_run_pipeline():
     explicit_stocks = list(overrides.get("stocks", []))
 
     def _run():
-        global _pipeline_running
+        global _pipeline_running, _pipeline_last_error
+        _pipeline_last_error = ""
         try:
             orch = AgentOrchestrator(CONFIG_PATH)
+            # Auto-populate recipients from DB subscribers if none were supplied
+            if "recipients" not in overrides:
+                try:
+                    _db = get_db()
+                    subs = _db.get_active_subscribers() or []
+                    emails = [s["email"] for s in subs if s.get("email")]
+                    if emails:
+                        overrides["recipients"] = emails
+                        app.logger.info(f"Auto-loaded {len(emails)} subscriber(s) as email recipients")
+                except Exception as _sub_exc:
+                    app.logger.warning(f"Could not load subscribers for email: {_sub_exc}")
             orch.apply_overrides(overrides)
             orch.initialize_agents()
             orch.run_agents()
             orch.stop_agents()
             # Send Telegram alerts.
-            # For manual runs, pass the explicit stock list so every subscribed
-            # user gets alerts for what they chose — regardless of watchlist.
-            # (Watchlist filter only applies to scheduled/automated runs.)
             try:
                 db = get_db()
                 signals = db.get_latest_signals(limit=50)
                 send_pipeline_alerts(db, signals, explicit_symbols=explicit_stocks or None)
             except Exception as tg_exc:
                 app.logger.warning(f"Telegram alert error: {tg_exc}")
+        except Exception as exc:
+            _pipeline_last_error = str(exc)
+            app.logger.error(f"Pipeline error: {exc}", exc_info=True)
         finally:
             _pipeline_running = False
             _pipeline_lock.release()
@@ -518,7 +546,37 @@ def api_run_pipeline():
 
 @app.route("/api/pipeline/status")
 def api_pipeline_status():
-    return jsonify({"running": _pipeline_running})
+    return jsonify({"running": _pipeline_running, "last_error": _pipeline_last_error})
+
+
+@app.route("/api/health")
+def api_health():
+    """Returns configuration status for this installation — useful for debugging on new machines."""
+    provider = os.getenv("LLM_PROVIDER", "claude").lower()
+    key_map = {"claude": "CLAUDE_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+    llm_key = os.getenv(key_map.get(provider, "CLAUDE_API_KEY"), "")
+    bad = {"your-claude-api-key-here", "your-gemini-api-key-here",
+           "sk-your-openai-api-key-here", ""}
+    smtp_ok = bool(os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD")
+                   and "your_email" not in os.getenv("SMTP_USER", ""))
+    tg_ok   = bool(os.getenv("TELEGRAM_BOT_TOKEN") and
+                   os.getenv("TELEGRAM_BOT_TOKEN") != "your-telegram-bot-token-here")
+    sk      = os.getenv("FLASK_SECRET_KEY", "")
+    return jsonify({
+        "llm_provider":      provider,
+        "llm_key_set":       llm_key not in bad,
+        "smtp_configured":   smtp_ok,
+        "telegram_configured": tg_ok,
+        "secret_key_set":    bool(sk) and "change_me" not in sk,
+        "db_exists":         os.path.exists("data/marketmind.db"),
+        "warnings": [
+            *([f"{key_map.get(provider)} not set — Run Analysis will not work"] if llm_key in bad else []),
+            *([] if smtp_ok else ["SMTP not configured — email alerts will be skipped"]),
+            *([] if tg_ok  else ["Telegram not configured — Telegram alerts disabled"]),
+            *([] if (bool(sk) and "change_me" not in sk)
+               else ["FLASK_SECRET_KEY not set — sessions reset on restart"]),
+        ]
+    })
 
 
 @app.route("/api/market/status")
@@ -968,6 +1026,70 @@ def _yf_sym(sym: str) -> str:
     return s if s.endswith(".NS") else s + ".NS"
 
 
+# ── Shared Yahoo Finance HTTP session (avoids yfinance library) ───────────────
+class _YFSession:
+    """Persistent session with crumb for Yahoo Finance v8 API."""
+    sess  = None
+    crumb = None
+
+    @classmethod
+    def _init(cls):
+        import requests as _r
+        s = _r.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        })
+        try:
+            s.get("https://finance.yahoo.com", timeout=10)
+            r = s.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=10)
+            crumb = r.text.strip()
+            if crumb and len(crumb) < 30 and "Too Many" not in crumb:
+                cls.crumb = crumb
+        except Exception:
+            pass
+        cls.sess = s
+
+    @classmethod
+    def get(cls, url: str, **kwargs):
+        import requests as _r
+        if cls.sess is None:
+            cls._init()
+        params = kwargs.pop("params", {})
+        if cls.crumb:
+            params["crumb"] = cls.crumb
+        resp = cls.sess.get(url, params=params, **kwargs)
+        if resp.status_code in (401, 403):
+            cls._init()
+            if cls.crumb:
+                params["crumb"] = cls.crumb
+            resp = cls.sess.get(url, params=params, **kwargs)
+        return resp
+
+
+def _yf_chart(symbol: str, period: str = "5d", interval: str = "1d") -> dict:
+    """
+    Fetch Yahoo Finance v8 chart data without the yfinance library.
+    Returns the raw 'result' dict or {} on failure. Tries .NS then .BO.
+    """
+    for suffix in (".NS", ".BO"):
+        try:
+            resp = _YFSession.get(
+                f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}{suffix}",
+                params={"interval": interval, "range": period},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            d = resp.json()
+            result = (d.get("chart", {}).get("result") or [None])[0]
+            if result:
+                return result
+        except Exception:
+            continue
+    return {}
+
+
 @app.route("/stocks")
 def stocks_page():
     db = get_db()
@@ -987,19 +1109,19 @@ def api_stock_range(symbol: str):
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < 600:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        df = yf.download(_yf_sym(sym), period=period, interval=interval,
-                         progress=False, auto_adjust=True)
-        if df.empty:
+        result = _yf_chart(sym, period=period, interval=interval)
+        if not result:
             return jsonify([])
-        records = []
-        for ts, row in df.iterrows():
-            try:
-                cv = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
-                records.append({"t": ts.strftime("%d %b" if interval in ("1d","1wk") else "%H:%M"),
-                                 "c": round(cv, 2)})
-            except Exception:
+        timestamps = result.get("timestamp") or []
+        quotes     = result.get("indicators", {}).get("quote", [{}])[0]
+        closes     = quotes.get("close") or []
+        records    = []
+        fmt = "%d %b" if interval in ("1d", "1wk") else "%H:%M"
+        from datetime import datetime as _dt
+        for ts, cv in zip(timestamps, closes):
+            if cv is None:
                 continue
+            records.append({"t": _dt.fromtimestamp(ts).strftime(fmt), "c": round(float(cv), 2)})
         _live_cache[cache_key] = {"ts": now, "data": records}
         return jsonify(records)
     except Exception as exc:
@@ -1016,25 +1138,35 @@ def api_stock_live(symbol: str):
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        fi = yf.Ticker(_yf_sym(sym)).fast_info
-        change = fi.last_price - fi.previous_close
-        change_pct = (change / fi.previous_close * 100) if fi.previous_close else 0
+        result = _yf_chart(sym, period="5d", interval="1d")
+        if not result:
+            return jsonify({"error": "no data"}), 404
+        meta   = result.get("meta", {})
+        quotes = result.get("indicators", {}).get("quote", [{}])[0]
+        closes = [v for v in (quotes.get("close") or []) if v is not None]
+        if not closes:
+            return jsonify({"error": "no closes"}), 404
+        last_p = float(closes[-1])
+        prev_p = float(closes[-2]) if len(closes) >= 2 else float(meta.get("previousClose") or last_p)
+        change     = last_p - prev_p
+        change_pct = (change / prev_p * 100) if prev_p else 0
+        opens  = [v for v in (quotes.get("open")   or []) if v is not None]
+        highs  = [v for v in (quotes.get("high")   or []) if v is not None]
+        lows   = [v for v in (quotes.get("low")    or []) if v is not None]
+        vols   = [v for v in (quotes.get("volume") or []) if v is not None]
         data = {
-            "symbol": sym,
-            "price": round(fi.last_price, 2),
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "open": round(fi.open, 2) if fi.open else None,
-            "day_high": round(fi.day_high, 2) if fi.day_high else None,
-            "day_low": round(fi.day_low, 2) if fi.day_low else None,
-            "prev_close": round(fi.previous_close, 2),
-            "year_high": round(fi.year_high, 2) if fi.year_high else None,
-            "year_low": round(fi.year_low, 2) if fi.year_low else None,
-            "volume": int(fi.last_volume) if fi.last_volume else None,
-            "avg_volume": int(fi.three_month_average_volume) if fi.three_month_average_volume else None,
-            "market_cap": int(fi.market_cap) if fi.market_cap else None,
-            "year_change_pct": round(fi.year_change * 100, 2) if fi.year_change else None,
+            "symbol":       sym,
+            "price":        round(last_p, 2),
+            "change":       round(change, 2),
+            "change_pct":   round(change_pct, 2),
+            "open":         round(float(opens[-1]),  2) if opens  else None,
+            "day_high":     round(float(highs[-1]),  2) if highs  else None,
+            "day_low":      round(float(lows[-1]),   2) if lows   else None,
+            "prev_close":   round(prev_p, 2),
+            "year_high":    meta.get("fiftyTwoWeekHigh"),
+            "year_low":     meta.get("fiftyTwoWeekLow"),
+            "volume":       int(vols[-1])  if vols  else None,
+            "market_cap":   meta.get("marketCap"),
         }
         _live_cache[cache_key] = {"ts": now, "data": data}
         return jsonify(data)
@@ -1052,19 +1184,23 @@ def api_stock_intraday(symbol: str):
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        df = yf.download(_yf_sym(sym), period="1d", interval="5m",
-                         progress=False, auto_adjust=True)
-        if df.empty:
+        result = _yf_chart(sym, period="1d", interval="5m")
+        if not result:
             return jsonify([])
+        timestamps = result.get("timestamp") or []
+        quotes     = result.get("indicators", {}).get("quote", [{}])[0]
+        closes     = quotes.get("close")  or []
+        volumes    = quotes.get("volume") or []
+        from datetime import datetime as _dt
         records = []
-        for ts, row in df.iterrows():
-            try:
-                close_val = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
-                vol_val   = int(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else int(row["Volume"])
-                records.append({"t": ts.strftime("%H:%M"), "c": round(close_val, 2), "v": vol_val})
-            except Exception:
+        for ts, cv, vv in zip(timestamps, closes, volumes or [None]*len(closes)):
+            if cv is None:
                 continue
+            records.append({
+                "t": _dt.fromtimestamp(ts).strftime("%H:%M"),
+                "c": round(float(cv), 2),
+                "v": int(vv) if vv else 0,
+            })
         _live_cache[cache_key] = {"ts": now, "data": records}
         return jsonify(records)
     except Exception as exc:
@@ -1074,56 +1210,103 @@ def api_stock_intraday(symbol: str):
 
 @app.route("/api/stocks/movers")
 def api_stocks_movers():
-    """Top gainers & losers from Nifty 50 (5-min cache)."""
+    """Top gainers & losers – NSE India primary, Yahoo Finance fallback (5-min cache)."""
+    import time as _time_mod
     now = _time.time()
     if "movers" in _live_cache and now - _live_cache["movers"]["ts"] < _MOVERS_CACHE_SECS:
         return jsonify(_live_cache["movers"]["data"])
+
+    # ── Attempt 1: NSE India live-analysis API (works on weekends = last trading day) ──
     try:
-        import yfinance as yf
-        symbols = NIFTY50_SYMBOLS[:35]
-        yf_syms = [_yf_sym(s) for s in symbols]
-        # Use 5d so weekends/holidays never leave us with < 2 trading days
-        df = yf.download(yf_syms, period="5d", interval="1d",
-                         progress=False, auto_adjust=True)
-        # yfinance returns a MultiIndex (Price, Ticker); slice out Close
-        if hasattr(df.columns, "levels"):
-            try:
-                close = df["Close"]
-            except KeyError:
-                close = df
-        else:
-            close = df.get("Close", df)
-        results = []
-        for sym, yfs in zip(symbols, yf_syms):
-            try:
-                col = None
-                if yfs in close.columns:
-                    col = close[yfs]
-                elif sym in close.columns:
-                    col = close[sym]
-                if col is None:
-                    continue
-                vals = col.dropna().values
-                if len(vals) < 2:
-                    continue
-                prev_p, last_p = float(vals[-2]), float(vals[-1])
-                chg_pct = (last_p - prev_p) / prev_p * 100 if prev_p else 0
-                results.append({
-                    "symbol": sym, "price": round(last_p, 2),
-                    "change_pct": round(chg_pct, 2), "change": round(last_p - prev_p, 2),
-                })
-            except Exception:
-                continue
-        results.sort(key=lambda x: x["change_pct"], reverse=True)
-        gainers = [r for r in results if r["change_pct"] > 0][:8]
-        losers  = sorted([r for r in results if r["change_pct"] < 0],
-                         key=lambda x: x["change_pct"])[:8]
-        data = {"gainers": gainers, "losers": losers}
-        _live_cache["movers"] = {"ts": now, "data": data}
-        return jsonify(data)
+        nse_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/",
+        }
+        nse_sess = _YFSession.sess or __import__("requests").Session()
+        nse_sess.headers.update(nse_headers)
+        # Warm up the session with NSE homepage to get cookies
+        nse_sess.get("https://www.nseindia.com", timeout=10)
+        _time_mod.sleep(0.5)
+
+        def _nse_movers(index_type: str):
+            r = nse_sess.get(
+                f"https://www.nseindia.com/api/live-analysis-variations?index={index_type}&type=nifty500",
+                headers=nse_headers, timeout=10,
+            )
+            if r.status_code != 200:
+                return []
+            d = r.json()
+            out = []
+            for section in ("NIFTY", "BANKNIFTY", "NIFTYNEXT50", "allSec"):
+                rows = d.get(section, {}).get("data") or []
+                for row in rows:
+                    sym = row.get("symbol", "")
+                    ltp = float(row.get("ltp") or 0)
+                    chg = float(row.get("perChange") or row.get("net_price") or 0)
+                    prev = float(row.get("prev_price") or ltp)
+                    if not sym or ltp == 0:
+                        continue
+                    out.append({
+                        "symbol": sym,
+                        "price": round(ltp, 2),
+                        "change_pct": round(chg, 2),
+                        "change": round(ltp - prev, 2),
+                    })
+            # deduplicate by symbol, keep first occurrence
+            seen = set()
+            unique = []
+            for item in out:
+                if item["symbol"] not in seen:
+                    seen.add(item["symbol"])
+                    unique.append(item)
+            return unique
+
+        gainers_raw = _nse_movers("gainers")
+        _time_mod.sleep(0.5)
+        losers_raw  = _nse_movers("loosers")   # NSE spells it "loosers"
+
+        if gainers_raw or losers_raw:
+            gainers = sorted(gainers_raw, key=lambda x: x["change_pct"], reverse=True)[:8]
+            losers  = sorted(losers_raw,  key=lambda x: x["change_pct"])[:8]
+            data = {"gainers": gainers, "losers": losers, "source": "NSE"}
+            _live_cache["movers"] = {"ts": now, "data": data}
+            return jsonify(data)
     except Exception as exc:
-        app.logger.error(f"Movers error: {exc}")
-        return jsonify({"gainers": [], "losers": [], "error": str(exc)})
+        app.logger.warning(f"NSE movers error: {exc}")
+
+    # ── Attempt 2: Yahoo Finance v7 bulk quote (single API call) ──────────────
+    try:
+        yf_syms = ",".join(f"{s}.NS" for s in NIFTY50_SYMBOLS[:35])
+        resp = _YFSession.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": yf_syms},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            results = []
+            for q in (resp.json().get("quoteResponse", {}).get("result") or []):
+                sym     = q.get("symbol", "").replace(".NS", "").replace(".BO", "")
+                price   = float(q.get("regularMarketPrice") or 0)
+                chg_pct = float(q.get("regularMarketChangePercent") or 0)
+                chg     = float(q.get("regularMarketChange") or 0)
+                if not sym or price == 0:
+                    continue
+                results.append({"symbol": sym, "price": round(price, 2),
+                                 "change_pct": round(chg_pct, 2), "change": round(chg, 2)})
+            gainers = sorted([r for r in results if r["change_pct"] > 0],
+                             key=lambda x: x["change_pct"], reverse=True)[:8]
+            losers  = sorted([r for r in results if r["change_pct"] < 0],
+                             key=lambda x: x["change_pct"])[:8]
+            data = {"gainers": gainers, "losers": losers, "source": "Yahoo Finance"}
+            if gainers or losers:
+                _live_cache["movers"] = {"ts": now, "data": data}
+            return jsonify(data)
+    except Exception as exc:
+        app.logger.error(f"YF bulk movers error: {exc}")
+
+    return jsonify({"gainers": [], "losers": [], "error": "all sources failed"})
 
 
 @app.route("/api/stocks/trending")

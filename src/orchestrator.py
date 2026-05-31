@@ -9,6 +9,7 @@ Agent Orchestrator - Manages and coordinates all six agents in sequence:
 """
 import logging
 import yaml
+from datetime import datetime
 from typing import Dict, List, Any
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from .agents.signal_generator_agent import SignalGeneratorAgent
 from .agents.report_generator_agent import ReportGeneratorAgent
 from .agents.email_alert_agent import EmailAlertAgent
 from .database.db_manager import DatabaseManager
+from .models.market_data import StockData, MarketDataSnapshot
 
 
 class AgentOrchestrator:
@@ -180,11 +182,16 @@ class AgentOrchestrator:
             except Exception as exc:
                 self.logger.error(f"Market Data Agent error: {exc}")
                 results["market_data_agent"] = {"status": "error", "error": str(exc)}
-                return results   # Nothing to analyse without market data
 
         if not market_data:
-            self.logger.warning("No market data collected – aborting pipeline")
-            return results
+            self.logger.warning("No live market data collected – attempting fallback to cached DB data")
+            market_data = self._load_cached_market_data()
+            if market_data:
+                self.logger.info(f"  → Using {len(market_data)} cached snapshot(s) from DB")
+                results["market_data_agent"] = {"status": "cached", "data_count": len(market_data)}
+            else:
+                self.logger.warning("No cached data available either – aborting pipeline")
+                return results
 
         # ── Stage 2: News ─────────────────────────────────────────────────────
         news: List[Dict] = []
@@ -286,3 +293,38 @@ class AgentOrchestrator:
 
     def get_db(self) -> DatabaseManager:
         return self.db
+
+    def _load_cached_market_data(self) -> List[MarketDataSnapshot]:
+        """Return the most recent DB snapshot for each tracked stock as fallback."""
+        snapshots: List[MarketDataSnapshot] = []
+        stocks = self.config.get("agents", {}).get("market_data_agent", {}).get("stocks", [])
+        for symbol in stocks:
+            try:
+                rows = self.db.get_recent_stock_data(symbol, limit=1)
+                if not rows:
+                    continue
+                r = rows[0]
+                ts = r.get("timestamp")
+                if isinstance(ts, str):
+                    try:
+                        ts = datetime.fromisoformat(ts)
+                    except Exception:
+                        ts = datetime.now()
+                stock = StockData(
+                    symbol=r.get("symbol", symbol),
+                    company_name=r.get("company_name", symbol),
+                    timestamp=ts,
+                    price=float(r.get("price") or 0),
+                    open_price=float(r.get("open_price") or 0),
+                    high=float(r.get("high") or 0),
+                    low=float(r.get("low") or 0),
+                    close_price=float(r.get("close_price") or 0) if r.get("close_price") else None,
+                    volume=int(r.get("volume") or 0),
+                    change=float(r.get("change") or 0),
+                    change_percent=float(r.get("change_percent") or 0),
+                    source=r.get("source", "cached"),
+                )
+                snapshots.append(MarketDataSnapshot(stock_data=stock))
+            except Exception as exc:
+                self.logger.warning(f"Could not load cached data for {symbol}: {exc}")
+        return snapshots

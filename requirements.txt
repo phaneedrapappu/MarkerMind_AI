@@ -18,6 +18,9 @@ yfinance==0.2.37
 # Database
 sqlalchemy==2.0.25
 
+# Password hashing (REQUIRED for user registration/login)
+bcrypt>=4.0.0
+
 # Visualization / Report generation
 matplotlib==3.8.2
 seaborn==0.13.1

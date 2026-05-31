@@ -3,6 +3,17 @@
 
 {% block content %}
 
+<!-- Setup warning banner (auto-hides when everything is configured) -->
+<div id="setupWarningBanner" style="display:none" class="alert alert-warning align-items-start gap-3 mb-3 py-2 px-3" role="alert">
+  <i class="bi bi-exclamation-triangle-fill mt-1" style="font-size:18px;flex-shrink:0"></i>
+  <div>
+    <strong>Setup incomplete on this machine.</strong>
+    <ul id="setupWarningList" class="mb-1 mt-1 ps-3" style="font-size:13px"></ul>
+    <span class="text-muted" style="font-size:12px">Edit your <code>.env</code> file and restart the server to fix these. Run <code>bash start.sh</code> for guided setup.</span>
+  </div>
+  <button type="button" class="btn-close btn-sm ms-auto" onclick="document.getElementById('setupWarningBanner').style.display='none'" aria-label="Dismiss"></button>
+</div>
+
 <!-- KPI Row -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-lg-3">
@@ -407,6 +418,17 @@ function loadSuggestions(isAutoLoad) {
 // Auto-load AI news suggestions on page load (marked as auto so 503 triggers retry)
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => loadSuggestions(true), 1500);
+  // Health check — show banner if anything critical isn't configured
+  fetch('/api/health').then(r => r.json()).then(h => {
+    if (h.warnings && h.warnings.length) {
+      const list = document.getElementById('setupWarningList');
+      const banner = document.getElementById('setupWarningBanner');
+      if (list && banner) {
+        list.innerHTML = h.warnings.map(w => `<li>${w}</li>`).join('');
+        banner.style.display = 'flex';
+      }
+    }
+  }).catch(() => {});
 });
 </script>
 {% endblock %}

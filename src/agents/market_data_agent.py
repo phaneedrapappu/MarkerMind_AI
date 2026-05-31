@@ -7,6 +7,9 @@ import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import time
+import csv
+import io
+import requests
 
 from ..agents.base_agent import BaseAgent
 from ..data_sources.nse_fetcher import NSEDataFetcher
@@ -112,7 +115,7 @@ class MarketDataAgent(BaseAgent):
     def _fetch_stock_data(self, symbol: str) -> Optional[MarketDataSnapshot]:
         """
         Fetch complete data for a single stock.
-        Tries NSE first; falls back to yfinance if NSE is unavailable.
+        Tries NSE → yfinance → Stooq → BSE in order until one succeeds.
         """
         if not self.nse_fetcher:
             self.logger.error("NSE fetcher not initialized")
@@ -121,10 +124,20 @@ class MarketDataAgent(BaseAgent):
         # Attempt NSE
         quote_data = self.nse_fetcher.get_stock_quote(symbol)
 
-        # yfinance fallback
-        if not quote_data and YFINANCE_AVAILABLE:
-            self.logger.warning(f"NSE fetch failed for {symbol}, trying yfinance …")
+        # yfinance fallback (direct Yahoo Finance v8 HTTP API)
+        if not quote_data:
+            self.logger.warning(f"NSE fetch failed for {symbol}, trying Yahoo Finance …")
             quote_data = self._fetch_via_yfinance(symbol)
+
+        # BSE India fallback
+        if not quote_data:
+            self.logger.warning(f"Yahoo Finance failed for {symbol}, trying BSE India …")
+            quote_data = self._fetch_via_bse(symbol)
+
+        # Alpha Vantage fallback (free key: set ALPHA_VANTAGE_KEY in .env)
+        if not quote_data:
+            self.logger.warning(f"BSE failed for {symbol}, trying Alpha Vantage …")
+            quote_data = self._fetch_via_alpha_vantage(symbol)
         
         if not quote_data:
             return None
@@ -176,37 +189,243 @@ class MarketDataAgent(BaseAgent):
         )
         return snapshot
 
-    def _fetch_via_yfinance(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch basic quote data from Yahoo Finance (NS suffix for NSE stocks)."""
+    # ── Yahoo Finance helpers ─────────────────────────────────────────────────
+    _yf_crumb: Optional[str] = None
+    _yf_session: Optional[requests.Session] = None
+
+    def _get_yf_crumb(self) -> Optional[str]:
+        """Obtain a Yahoo Finance crumb+cookie (required since 2024)."""
         try:
-            ticker_sym = f"{symbol}.NS"
-            ticker = yf.Ticker(ticker_sym)
-            info = ticker.fast_info
-            hist = ticker.history(period="1d")
-            if hist.empty:
+            sess = requests.Session()
+            sess.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+            })
+            # Step 1: hit the main page to get cookies
+            sess.get("https://finance.yahoo.com", timeout=10)
+            # Step 2: get the crumb
+            r = sess.get(
+                "https://query2.finance.yahoo.com/v1/test/getcrumb",
+                timeout=10,
+            )
+            crumb = r.text.strip()
+            if crumb and len(crumb) < 20:
+                MarketDataAgent._yf_crumb = crumb
+                MarketDataAgent._yf_session = sess
+                return crumb
+        except Exception as exc:
+            self.logger.warning(f"Could not get YF crumb: {exc}")
+        return None
+
+    def _fetch_via_yfinance(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch quote directly from Yahoo Finance v8 API with crumb auth."""
+        crumb = MarketDataAgent._yf_crumb or self._get_yf_crumb()
+        sess  = MarketDataAgent._yf_session or requests.Session()
+
+        for suffix in (".NS", ".BO"):
+            for attempt in range(3):
+                try:
+                    if attempt:
+                        time.sleep(2 ** attempt)
+                    params: Dict[str, Any] = {"interval": "1d", "range": "5d"}
+                    if crumb:
+                        params["crumb"] = crumb
+                    url = (
+                        f"https://query2.finance.yahoo.com/v8/finance/chart/"
+                        f"{symbol}{suffix}"
+                    )
+                    resp = sess.get(url, params=params, timeout=10)
+                    if resp.status_code == 401:
+                        # Crumb expired — refresh and retry
+                        crumb = self._get_yf_crumb()
+                        sess  = MarketDataAgent._yf_session or sess
+                        continue
+                    if resp.status_code == 429:
+                        self.logger.warning(f"YF rate-limited ({suffix}), retrying…")
+                        time.sleep(3)
+                        continue
+                    if resp.status_code != 200:
+                        break
+                    data   = resp.json()
+                    result = (data.get("chart", {}).get("result") or [None])[0]
+                    if not result:
+                        break
+                    meta   = result.get("meta", {})
+                    quotes = result.get("indicators", {}).get("quote", [{}])[0]
+                    closes = [v for v in (quotes.get("close")  or []) if v is not None]
+                    opens  = [v for v in (quotes.get("open")   or []) if v is not None]
+                    highs  = [v for v in (quotes.get("high")   or []) if v is not None]
+                    lows   = [v for v in (quotes.get("low")    or []) if v is not None]
+                    vols   = [v for v in (quotes.get("volume") or []) if v is not None]
+                    if not closes:
+                        break
+                    close      = float(closes[-1])
+                    prev_close = float(closes[-2]) if len(closes) >= 2 else float(meta.get("previousClose") or close)
+                    change     = close - prev_close
+                    change_pct = (change / prev_close * 100) if prev_close else 0
+                    return {
+                        "symbol": symbol.upper(),
+                        "company_name": meta.get("shortName") or meta.get("symbol") or symbol,
+                        "timestamp": datetime.now(),
+                        "price": close,
+                        "open": float(opens[-1]) if opens else close,
+                        "high": float(highs[-1]) if highs else close,
+                        "low": float(lows[-1]) if lows else close,
+                        "close": close,
+                        "volume": int(vols[-1]) if vols else 0,
+                        "change": change,
+                        "change_percent": change_pct,
+                        "source": f"Yahoo Finance ({suffix.strip('.')})",
+                    }
+                except Exception as exc:
+                    self.logger.warning(f"Yahoo Finance ({suffix}) attempt {attempt+1} for {symbol}: {exc}")
+        return None
+
+    def _fetch_via_stooq(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch quote from Stooq (free, no API key, reliable for NSE stocks)."""
+        try:
+            # Use historical daily endpoint — returns last N rows, works on weekends
+            ticker = f"{symbol.lower()}.ns"
+            url = f"https://stooq.com/q/d/l/?s={ticker}&i=d"
+            resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            reader = csv.DictReader(io.StringIO(resp.text))
+            rows = [r for r in reader if r.get("Close") not in (None, "", "null", "N/D")]
+            if not rows:
                 return None
-            row = hist.iloc[-1]
-            prev_close = info.previous_close or row["Close"]
-            change = row["Close"] - prev_close
+            r = rows[-1]   # last trading day
+            close = float(r.get("Close") or 0)
+            open_ = float(r.get("Open") or close)
+            prev_close = float(rows[-2]["Close"]) if len(rows) >= 2 else open_
+            change = close - prev_close
             change_pct = (change / prev_close * 100) if prev_close else 0
+            if close == 0:
+                return None
+            try:
+                ts = datetime.strptime(r.get("Date", ""), "%Y-%m-%d")
+            except Exception:
+                ts = datetime.now()
             return {
                 "symbol": symbol.upper(),
-                "company_name": ticker.info.get("longName", symbol),
-                "timestamp": datetime.now(),
-                "price": float(row["Close"]),
-                "open": float(row["Open"]),
-                "high": float(row["High"]),
-                "low": float(row["Low"]),
-                "close": float(row["Close"]),
-                "volume": int(row["Volume"]),
-                "change": float(change),
-                "change_percent": float(change_pct),
-                "source": "Yahoo Finance",
+                "company_name": symbol.upper(),
+                "timestamp": ts,
+                "price": close,
+                "open": open_,
+                "high": float(r.get("High") or close),
+                "low": float(r.get("Low") or close),
+                "close": close,
+                "volume": int(float(r.get("Volume") or 0)),
+                "change": change,
+                "change_percent": change_pct,
+                "source": "Stooq",
             }
         except Exception as exc:
-            self.logger.error(f"yfinance fetch failed for {symbol}: {exc}")
+            self.logger.error(f"Stooq fetch failed for {symbol}: {exc}")
             return None
-    
+
+    def _fetch_via_bse(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch quote from BSE India public API (no auth required)."""
+        # BSE uses numeric scrip codes; map via search API
+        try:
+            search_url = (
+                f"https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w"
+                f"?Debtflag=&scripcode=&Scripname={symbol}&segment=0&status=A"
+            )
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://www.bseindia.com/",
+            }
+            sr = requests.get(search_url, headers=headers, timeout=10)
+            sr.raise_for_status()
+            results = sr.json()
+            if not results:
+                return None
+            scrip_code = results[0].get("SCRIP_CD") or results[0].get("scrip_cd")
+            if not scrip_code:
+                return None
+
+            quote_url = (
+                f"https://api.bseindia.com/BseIndiaAPI/api/getQuoteData/w"
+                f"?scripcode={scrip_code}&flag=C&quotetype=EQ"
+            )
+            qr = requests.get(quote_url, headers=headers, timeout=10)
+            qr.raise_for_status()
+            q = qr.json()
+            close = float(q.get("CurrRate") or q.get("PrevRate") or 0)
+            if close == 0:
+                return None
+            prev = float(q.get("PrevRate") or close)
+            change = close - prev
+            change_pct = (change / prev * 100) if prev else 0
+            return {
+                "symbol": symbol.upper(),
+                "company_name": q.get("CompanyName", symbol),
+                "timestamp": datetime.now(),
+                "price": close,
+                "open": float(q.get("OpenRate") or close),
+                "high": float(q.get("High52") or close),
+                "low": float(q.get("Low52") or close),
+                "close": close,
+                "volume": int(float(q.get("TotalTradedQty") or 0)),
+                "change": change,
+                "change_percent": change_pct,
+                "source": "BSE",
+            }
+        except Exception as exc:
+            self.logger.error(f"BSE fetch failed for {symbol}: {exc}")
+            return None
+
+    def _fetch_via_alpha_vantage(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch quote from Alpha Vantage (free tier: 25 req/day).
+        Requires ALPHA_VANTAGE_KEY in .env (get free key at https://www.alphavantage.co/support/#api-key).
+        """
+        import os
+        api_key = os.getenv("ALPHA_VANTAGE_KEY", "demo")
+        try:
+            url = "https://www.alphavantage.co/query"
+            params = {
+                "function": "GLOBAL_QUOTE",
+                "symbol": f"{symbol}.BSE",   # Alpha Vantage uses .BSE for Indian stocks
+                "apikey": api_key,
+            }
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            q = data.get("Global Quote", {})
+            close = float(q.get("05. price") or 0)
+            if close == 0:
+                # Try NSE suffix
+                params["symbol"] = f"{symbol}.NSE"
+                resp = requests.get(url, params=params, timeout=10)
+                q = resp.json().get("Global Quote", {})
+                close = float(q.get("05. price") or 0)
+            if close == 0:
+                return None
+            prev_close = float(q.get("08. previous close") or close)
+            change     = float(q.get("09. change") or close - prev_close)
+            change_pct = float(q.get("10. change percent", "0%").replace("%", "") or 0)
+            return {
+                "symbol": symbol.upper(),
+                "company_name": symbol.upper(),
+                "timestamp": datetime.now(),
+                "price": close,
+                "open": float(q.get("02. open") or close),
+                "high": float(q.get("03. high") or close),
+                "low": float(q.get("04. low") or close),
+                "close": close,
+                "volume": int(float(q.get("06. volume") or 0)),
+                "change": change,
+                "change_percent": change_pct,
+                "source": "Alpha Vantage",
+            }
+        except Exception as exc:
+            self.logger.error(f"Alpha Vantage fetch failed for {symbol}: {exc}")
+            return None
+
     def _parse_bulk_deals(self, deals_data: List[Dict], symbol: str) -> List[BulkBlockDeal]:
         """Parse bulk deals data"""
         bulk_deals = []
