@@ -19,6 +19,7 @@ from .agents.signal_generator_agent import SignalGeneratorAgent
 from .agents.report_generator_agent import ReportGeneratorAgent
 from .agents.email_alert_agent import EmailAlertAgent
 from .database.db_manager import DatabaseManager
+from .models.market_data import StockData, MarketDataSnapshot
 
 
 class AgentOrchestrator:
@@ -33,6 +34,7 @@ class AgentOrchestrator:
         self.config = self._load_config()
         self.db: DatabaseManager = None
         self.agents: Dict[str, Any] = {}
+        self.tracked_stocks: List[str] = []
         self.logger = logging.getLogger("MarketMindAI.Orchestrator")
 
     # ── Config & logging ───────────────────────────────────────────────────────
@@ -102,6 +104,7 @@ class AgentOrchestrator:
 
         agent_cfgs = self.config.get("agents", {})
         stocks = agent_cfgs.get("market_data_agent", {}).get("stocks", [])
+        self.tracked_stocks = stocks
 
         # ── Market Data Agent ─────────────────────────────────────────────────
         mda_cfg = agent_cfgs.get("market_data_agent", {})
@@ -183,8 +186,12 @@ class AgentOrchestrator:
                 return results   # Nothing to analyse without market data
 
         if not market_data:
-            self.logger.warning("No market data collected – aborting pipeline")
-            return results
+            self.logger.warning("No live market data – attempting DB fallback …")
+            market_data = self._load_market_data_from_db()
+            if not market_data:
+                self.logger.warning("No market data in DB either – aborting pipeline")
+                return results
+            self.logger.info(f"DB fallback: loaded {len(market_data)} cached snapshot(s)")
 
         # ── Stage 2: News ─────────────────────────────────────────────────────
         news: List[Dict] = []
@@ -272,6 +279,49 @@ class AgentOrchestrator:
         return results
 
     # ── Lifecycle helpers ──────────────────────────────────────────────────────
+
+    # ── DB fallback ────────────────────────────────────────────────────────────
+
+    def _load_market_data_from_db(self) -> List[MarketDataSnapshot]:
+        """Build MarketDataSnapshot objects from the most recent DB records."""
+        if not self.db:
+            return []
+        from datetime import datetime as _dt
+        snapshots: List[MarketDataSnapshot] = []
+        for symbol in self.tracked_stocks:
+            try:
+                rows = self.db.get_recent_stock_data(symbol, limit=1)
+                if not rows:
+                    continue
+                r = rows[0]
+                ts = r.get("timestamp")
+                if isinstance(ts, str):
+                    try:
+                        ts = _dt.fromisoformat(ts)
+                    except Exception:
+                        ts = _dt.utcnow()
+                stock = StockData(
+                    symbol=r.get("symbol", symbol),
+                    company_name=r.get("company_name", symbol),
+                    timestamp=ts or _dt.utcnow(),
+                    price=r.get("price") or 0.0,
+                    open_price=r.get("open_price") or 0.0,
+                    high=r.get("high") or 0.0,
+                    low=r.get("low") or 0.0,
+                    close_price=r.get("close_price") or 0.0,
+                    volume=r.get("volume") or 0,
+                    change=r.get("change") or 0.0,
+                    change_percent=r.get("change_percent") or 0.0,
+                    source=r.get("source", "CACHED"),
+                )
+                snapshots.append(MarketDataSnapshot(
+                    stock_data=stock,
+                    bulk_block_deals=[],
+                    institutional_activity=[],
+                ))
+            except Exception as exc:
+                self.logger.warning(f"DB fallback failed for {symbol}: {exc}")
+        return snapshots
 
     def stop_agents(self):
         for name, agent in self.agents.items():

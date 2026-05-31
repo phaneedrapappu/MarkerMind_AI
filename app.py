@@ -24,7 +24,10 @@ import sys
 import threading
 from datetime import datetime, timedelta, time
 from pathlib import Path
-from zoneinfo import ZoneInfo
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 import hashlib
 import hmac
@@ -121,6 +124,61 @@ CONFIG_PATH = str(ROOT / "config" / "config.yaml")
 _db: DatabaseManager = None
 _pipeline_lock = threading.Lock()
 _pipeline_running = False
+_last_pipeline_result: dict = {}
+_news_fetch_lock = threading.Lock()
+_news_fetching = False
+_market_fetch_lock = threading.Lock()
+_market_fetching = False
+
+
+def _fetch_news_standalone():
+    """Run only the NewsAgent in a background thread to populate news without a full pipeline."""
+    global _news_fetching
+    if not _news_fetch_lock.acquire(blocking=False):
+        return  # already running
+    _news_fetching = True
+    try:
+        import yaml
+        from src.agents.news_agent import NewsAgent
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f)
+        agent_cfgs = cfg.get("agents", {})
+        stocks = agent_cfgs.get("market_data_agent", {}).get("stocks", [])
+        news_cfg = agent_cfgs.get("news_agent", {})
+        news_cfg.setdefault("stocks", stocks)
+        db = get_db()
+        agent = NewsAgent(news_cfg, db_manager=db)
+        if agent.initialize():
+            agent.execute()
+    except Exception as exc:
+        app.logger.warning(f"Standalone news fetch error: {exc}")
+    finally:
+        _news_fetching = False
+        _news_fetch_lock.release()
+
+
+def _fetch_market_data_standalone():
+    """Run only the MarketDataAgent in a background thread to populate stock prices."""
+    global _market_fetching
+    if not _market_fetch_lock.acquire(blocking=False):
+        return  # already running
+    _market_fetching = True
+    try:
+        import yaml
+        from src.agents.market_data_agent import MarketDataAgent
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f)
+        agent_cfgs = cfg.get("agents", {})
+        mda_cfg = agent_cfgs.get("market_data_agent", {})
+        db = get_db()
+        agent = MarketDataAgent(mda_cfg, db_manager=db)
+        if agent.initialize():
+            agent.execute()
+    except Exception as exc:
+        app.logger.warning(f"Standalone market data fetch error: {exc}")
+    finally:
+        _market_fetching = False
+        _market_fetch_lock.release()
 
 _IST = ZoneInfo("Asia/Kolkata")
 _NSE_OPEN = time(9, 15)
@@ -362,6 +420,11 @@ def dashboard():
     if not news:
         news = _fetch_live_news_and_save(db)[:10]
     alerts = db.get_recent_alerts(5)
+    # Auto-fetch in the background if DB has no data yet
+    if not news:
+        threading.Thread(target=_fetch_news_standalone, daemon=True).start()
+    if not summary["total_stocks_tracked"]:
+        threading.Thread(target=_fetch_market_data_standalone, daemon=True).start()
     return render_template(
         "dashboard.html",
         summary=summary,
@@ -480,24 +543,53 @@ def api_run_pipeline():
             overrides["stocks"] = [s.strip().upper() for s in body["stocks"].split(",") if s.strip()]
         else:
             overrides["stocks"] = [s.strip().upper() for s in body["stocks"] if s.strip()]
-    # Email is optional — if not supplied the pipeline skips sending email
+    # Email — if supplied use those; if omitted, fall back to all active DB subscribers
     if body.get("email"):
         if isinstance(body["email"], str):
             overrides["recipients"] = [e.strip() for e in body["email"].split(",") if e.strip()]
         else:
             overrides["recipients"] = [e.strip() for e in body["email"] if e.strip()]
+    else:
+        # Auto-include every active subscriber so manual runs also trigger delivery
+        try:
+            _db_for_subs = get_db()
+            active_subs = _db_for_subs.get_active_subscribers()
+            sub_emails = [s["email"] for s in active_subs if s.get("email")]
+            if sub_emails:
+                overrides["recipients"] = sub_emails
+                app.logger.info(f"[Run] Auto-adding {len(sub_emails)} DB subscriber(s) as recipients")
+        except Exception as _sub_exc:
+            app.logger.warning(f"[Run] Could not fetch subscribers: {_sub_exc}")
+
+    # Always pass the current host URL so unsubscribe links work outside localhost
+    overrides["app_url"] = request.host_url.rstrip("/")
 
     # Capture the explicit stocks chosen in the modal for use in Telegram alerts
     explicit_stocks = list(overrides.get("stocks", []))
 
     def _run():
-        global _pipeline_running
+        global _pipeline_running, _last_pipeline_result
         try:
             orch = AgentOrchestrator(CONFIG_PATH)
             orch.apply_overrides(overrides)
             orch.initialize_agents()
-            orch.run_agents()
+            pipeline_result = orch.run_agents()
             orch.stop_agents()
+            # Store result for frontend polling
+            email_res = pipeline_result.get("email_alert_agent", {})
+            _last_pipeline_result = {
+                "signals": pipeline_result.get("signal_generator_agent", {}).get("signal_count", 0),
+                "email_status": email_res.get("status", "not_run"),
+                "email_sent_to": email_res.get("recipients", []),
+                "email_reason": email_res.get("reason", ""),
+                "email_error": email_res.get("error", ""),
+            }
+            if email_res.get("status") == "error":
+                app.logger.error(f"[Run] Email send failed: {email_res.get('error')}")
+            elif email_res.get("status") == "skipped":
+                app.logger.warning(f"[Run] Email skipped: {email_res.get('reason')}")
+            else:
+                app.logger.info(f"[Run] Email sent to: {email_res.get('recipients', [])}")
             # Send Telegram alerts.
             # For manual runs, pass the explicit stock list so every subscribed
             # user gets alerts for what they chose — regardless of watchlist.
@@ -508,6 +600,9 @@ def api_run_pipeline():
                 send_pipeline_alerts(db, signals, explicit_symbols=explicit_stocks or None)
             except Exception as tg_exc:
                 app.logger.warning(f"Telegram alert error: {tg_exc}")
+        except Exception as run_exc:
+            app.logger.error(f"[Run] Pipeline error: {run_exc}")
+            _last_pipeline_result = {"email_status": "error", "email_error": str(run_exc)}
         finally:
             _pipeline_running = False
             _pipeline_lock.release()
@@ -518,7 +613,20 @@ def api_run_pipeline():
 
 @app.route("/api/pipeline/status")
 def api_pipeline_status():
-    return jsonify({"running": _pipeline_running})
+    return jsonify({"running": _pipeline_running, "last_result": _last_pipeline_result})
+
+
+@app.route("/api/startup/status")
+def api_startup_status():
+    """Return current state of background startup data fetches."""
+    db = get_db()
+    summary = db.get_dashboard_summary()
+    return jsonify({
+        "fetching_news":        _news_fetching,
+        "fetching_market":      _market_fetching,
+        "has_news":             bool(db.get_news(limit=1)),
+        "total_stocks_tracked": summary["total_stocks_tracked"],
+    })
 
 
 @app.route("/api/market/status")
@@ -809,7 +917,12 @@ def api_news_suggestions():
     all_news = indian_news + global_news
 
     if not all_news:
-        return jsonify({"error": "Could not fetch news. Check your internet connection."}), 503
+        # Auto-trigger a background news fetch so subsequent calls will have data
+        threading.Thread(target=_fetch_news_standalone, daemon=True).start()
+        return jsonify({
+            "error": "Fetching news from market feeds — please retry in a moment.",
+            "fetching": True,
+        }), 202
 
     headlines = []
     for n in all_news[:35]:
@@ -964,8 +1077,8 @@ NIFTY50_SYMBOLS = [
 
 def _yf_sym(sym: str) -> str:
     """Convert NSE symbol to Yahoo Finance .NS format."""
-    s = sym.replace("&", "%26")
-    return s if s.endswith(".NS") else s + ".NS"
+    # Do NOT URL-encode — Yahoo Finance expects M&M.NS, not M%26M.NS
+    return sym if sym.endswith(".NS") else sym + ".NS"
 
 
 @app.route("/stocks")
@@ -1080,28 +1193,22 @@ def api_stocks_movers():
         return jsonify(_live_cache["movers"]["data"])
     try:
         import yfinance as yf
-        symbols = NIFTY50_SYMBOLS[:35]
+        symbols = NIFTY50_SYMBOLS[:30]
         yf_syms = [_yf_sym(s) for s in symbols]
-        # Use 5d so weekends/holidays never leave us with < 2 trading days
-        df = yf.download(yf_syms, period="5d", interval="1d",
-                         progress=False, auto_adjust=True)
-        # yfinance returns a MultiIndex (Price, Ticker); slice out Close
-        if hasattr(df.columns, "levels"):
-            try:
-                close = df["Close"]
-            except KeyError:
-                close = df
-        else:
-            close = df.get("Close", df)
+
+        # group_by='ticker' works reliably across yfinance 0.2.x versions
+        df = yf.download(
+            yf_syms, period="5d", interval="1d",
+            progress=False, auto_adjust=True, group_by="ticker"
+        )
+
         results = []
         for sym, yfs in zip(symbols, yf_syms):
             try:
-                col = None
-                if yfs in close.columns:
-                    col = close[yfs]
-                elif sym in close.columns:
-                    col = close[sym]
-                if col is None:
+                # With group_by='ticker': df[ticker_sym]["Close"]
+                if yfs in df.columns.get_level_values(0):
+                    col = df[yfs]["Close"]
+                else:
                     continue
                 vals = col.dropna().values
                 if len(vals) < 2:
@@ -1110,14 +1217,24 @@ def api_stocks_movers():
                 chg_pct = (last_p - prev_p) / prev_p * 100 if prev_p else 0
                 results.append({
                     "symbol": sym, "price": round(last_p, 2),
-                    "change_pct": round(chg_pct, 2), "change": round(last_p - prev_p, 2),
+                    "change_pct": round(chg_pct, 2),
+                    "change": round(last_p - prev_p, 2),
                 })
-            except Exception:
+            except Exception as sym_exc:
+                app.logger.debug(f"Movers skip {sym}: {sym_exc}")
                 continue
+
+        if not results:
+            raise ValueError("All symbols returned empty data from yfinance")
+
         results.sort(key=lambda x: x["change_pct"], reverse=True)
         gainers = [r for r in results if r["change_pct"] > 0][:8]
         losers  = sorted([r for r in results if r["change_pct"] < 0],
                          key=lambda x: x["change_pct"])[:8]
+        # Weekend / market closed: still show top/bottom movers
+        if not gainers and not losers and results:
+            gainers = results[:5]
+            losers  = results[-5:]
         data = {"gainers": gainers, "losers": losers}
         _live_cache["movers"] = {"ts": now, "data": data}
         return jsonify(data)
@@ -1294,6 +1411,48 @@ def _start_scheduler():
             "Run: pip install apscheduler"
         )
         return None
+
+
+# ── Auto news fetch ───────────────────────────────────────────────────────────
+_news_fetch_lock = threading.Lock()
+_news_fetch_running = False
+
+def _auto_fetch_news(force: bool = False):
+    """
+    Run the NewsAgent in a background thread to populate market and global news.
+    Called on startup and whenever news is empty / stale.
+    No stock-specific news is fetched here — only Indian market + global feeds.
+    """
+    global _news_fetch_running
+    if not _news_fetch_lock.acquire(blocking=False):
+        return  # already running
+    _news_fetch_running = True
+
+    def _run():
+        global _news_fetch_running
+        try:
+            import yaml
+            with open(CONFIG_PATH) as f:
+                cfg = yaml.safe_load(f)
+            db_path = cfg.get("database", {}).get("path", "data/marketmind.db")
+            from src.database.db_manager import DatabaseManager
+            from src.agents.news_agent import NewsAgent
+            db = DatabaseManager(db_path)
+            news_cfg = cfg.get("agents", {}).get("news_agent", {})
+            # Fetch general market + global feeds only (no per-stock RSS)
+            news_cfg["stocks"] = []
+            agent = NewsAgent(news_cfg, db)
+            if agent.initialize():
+                articles = agent.execute()
+                app.logger.info(f"[AutoNews] Fetched {len(articles)} articles")
+            agent.cleanup()
+        except Exception as exc:
+            app.logger.warning(f"[AutoNews] Failed: {exc}")
+        finally:
+            _news_fetch_running = False
+            _news_fetch_lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1770,6 +1929,17 @@ def api_telegram_test():
 
 if __name__ == "__main__":
     _start_scheduler()
+
+    # Auto-fetch market data + news on first launch if the database is empty
+    _initial_db = get_db()
+    _has_market = bool(_initial_db.get_dashboard_summary()["total_stocks_tracked"])
+    _has_news   = bool(_initial_db.get_news(limit=1) or _initial_db.get_global_news(limit=1))
+    if not _has_market:
+        app.logger.info("No market data in database — auto-fetching stock prices on startup …")
+        threading.Thread(target=_fetch_market_data_standalone, daemon=True).start()
+    if not _has_news:
+        app.logger.info("No news in database — auto-fetching news on startup …")
+        threading.Thread(target=_fetch_news_standalone, daemon=True).start()
 
     # ── Telegram: polling vs webhook, auto-detected ───────────────────────────
     # - If TELEGRAM_WEBHOOK_URL is set in .env → register webhook with Telegram

@@ -3,6 +3,21 @@
 
 {% block content %}
 
+{% if not signals and not news %}
+<!-- First-run fetching banner -->
+<div class="alert d-flex align-items-center gap-3 mb-4" id="firstRunBanner"
+     style="background:linear-gradient(135deg,#1e293b,#0f172a);border:1px solid var(--accent);border-radius:12px;padding:18px 22px">
+  <span class="spinner-border spinner-border-sm text-accent" style="flex-shrink:0"></span>
+  <div style="flex:1">
+    <div class="fw-semibold" style="color:var(--accent);font-size:14px">Setting up — fetching live market data &amp; news…</div>
+    <div class="text-muted mt-1" style="font-size:12px">Stock prices and headlines are being pulled from NSE and RSS feeds in the background. This page will refresh automatically in about 30 seconds.</div>
+  </div>
+  <button class="mm-btn-primary" style="font-size:12px;padding:5px 14px;white-space:nowrap" onclick="openRunModal()">
+    <i class="bi bi-play-fill me-1"></i>Run Full Analysis
+  </button>
+</div>
+{% endif %}
+
 <!-- KPI Row -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-lg-3">
@@ -76,7 +91,7 @@
               <td>
                 <div style="display:flex;align-items:center;gap:6px">
                   <div style="width:40px;height:5px;background:var(--bg-surface);border-radius:99px;overflow:hidden">
-                    <div style="width:{{ (s.confidence*100)|int }}%;height:100%;background:var(--green);border-radius:99px"></div>
+                    <div class="conf-bar" data-pct="{{ (s.confidence*100)|int }}" style="height:100%;background:var(--green);border-radius:99px"></div>
                   </div>
                   <span class="text-dim" style="font-size:12px">{{ "%.0f"|format(s.confidence * 100) }}%</span>
                 </div>
@@ -89,12 +104,18 @@
         </table>
         </div>
         {% else %}
-        <div class="empty-state">
+        <div class="empty-state" id="signalsEmpty">
+          {% if not news %}
+          <span class="spinner-border spinner-border-sm text-accent mb-2"></span><br>
+          <span style="font-size:13px">Fetching market data…</span>
+          <div class="text-muted mt-1" style="font-size:12px">Signals will appear after the first data fetch completes.</div>
+          {% else %}
           <i class="bi bi-lightning"></i>
           No signals yet.<br>
           <button class="mm-btn-primary mt-3" style="font-size:13px;padding:7px 18px" onclick="openRunModal()">
             <i class="bi bi-play-fill me-1"></i>Run Analysis
           </button>
+          {% endif %}
         </div>
         {% endif %}
       </div>
@@ -112,7 +133,7 @@
         </div>
       </div>
       <div class="mm-card-body p0" style="flex:1;overflow-y:auto;overflow-x:hidden;">
-        <!-- Indian news -->
+        <!-- Indian news (populated via JS / AJAX for live retry support) -->
         <div id="newsIndian">
           {% if news %}
             {% for n in news %}
@@ -134,7 +155,11 @@
             </div>
             {% endfor %}
           {% else %}
-          <div class="empty-state"><i class="bi bi-newspaper"></i>No news yet.</div>
+          <div class="empty-state" id="indianNewsEmpty">
+            <span class="spinner-border spinner-border-sm me-2 text-accent"></span>
+            <span style="font-size:13px">Fetching market news from RSS feeds…</span>
+            <div class="text-muted mt-1" style="font-size:12px">This page will refresh automatically when news is ready.</div>
+          </div>
           {% endif %}
         </div>
         <!-- Global news (loaded via JS) -->
@@ -223,11 +248,12 @@
 {% endblock %}
 
 {% block scripts %}
+<script id="signals-data" type="application/json">{{ signals_all | tojson }}</script>
 <script>
 // Signal doughnut chart — built from server-side data (same source as table)
 (function() {
-  const _allSignals = {{ signals_all | tojson }};
-  const counts = {BUY:0, SELL:0, HOLD:0};
+  const _allSignals = JSON.parse(document.getElementById('signals-data').textContent);
+  const counts = {BUY: 0, SELL: 0, HOLD: 0};
   _allSignals.forEach(s => { if (counts[s.signal_type] !== undefined) counts[s.signal_type]++; });
   const canvas = document.getElementById('signalDistChart');
   new Chart(canvas, {
@@ -257,6 +283,11 @@
   });
 })();
 
+// Apply data-pct widths for confidence bars (avoids Jinja2 in inline CSS)
+document.querySelectorAll('.conf-bar').forEach(function(el) {
+  el.style.width = (el.dataset.pct || 0) + '%';
+});
+
 // News tab switching
 let globalNewsLoaded = false;
 function switchNewsTab(tab) {
@@ -268,31 +299,68 @@ function switchNewsTab(tab) {
   if (isGlobal && !globalNewsLoaded) loadGlobalNews();
 }
 
+function _newsItemHtml(n, showSymbol) {
+  const title = (n.title||'').slice(0,100) + (n.title&&n.title.length>100?'…':'');
+  const dotCls = n.sentiment==='POSITIVE'?'dot-pos':n.sentiment==='NEGATIVE'?'dot-neg':'dot-neu';
+  const sym = n.symbol && n.symbol!=='__GLOBAL__' ? `<strong>${n.symbol}</strong> · ` : '';
+  const date = (n.published_at||'').slice(0,10);
+  return `<div class="mm-news-item">
+    <div class="mm-news-dot ${dotCls}"></div>
+    <div style="min-width:0">
+      <div class="mm-news-title"><a href="${n.url}" target="_blank" rel="noopener">${title}</a></div>
+      <div class="mm-news-meta">${sym}${n.source||''} · ${date}</div>
+    </div>
+  </div>`;
+}
+
+// Indian news — loaded via AJAX so we can auto-retry when DB is being populated
+let _indianNewsRetryTimer = null;
+function loadIndianNews(retryCount) {
+  retryCount = retryCount || 0;
+  fetch('/api/news?limit=15')
+    .then(r => {
+      if (r.status === 202) return r.json().then(d => ({fetching: true}));
+      return r.json().then(d => Array.isArray(d) ? {items: d} : {items: []});
+    })
+    .then(result => {
+      const container = document.getElementById('newsIndian');
+      if (result.fetching || (result.items && result.items.length === 0)) {
+        // News is being fetched — show spinner and retry
+        container.innerHTML = `<div class="text-muted small text-center py-4">
+          <span class="spinner-border spinner-border-sm me-2"></span>Fetching latest market news…
+        </div>`;
+        if (retryCount < 12) {  // retry up to 12 times (60 seconds total)
+          _indianNewsRetryTimer = setTimeout(() => loadIndianNews(retryCount + 1), 5000);
+        } else {
+          container.innerHTML = '<div class="empty-state"><i class="bi bi-newspaper"></i>No news available. Click Run Analysis to fetch.</div>';
+        }
+        return;
+      }
+      if (_indianNewsRetryTimer) { clearTimeout(_indianNewsRetryTimer); _indianNewsRetryTimer = null; }
+      container.innerHTML = result.items.map(n => _newsItemHtml(n)).join('');
+    })
+    .catch(() => {
+      // Keep server-side rendered content on error
+    });
+}
+
 function loadGlobalNews() {
   globalNewsLoaded = true;
   fetch('/api/news/global?limit=20')
-    .then(r => r.json())
-    .then(articles => {
+    .then(r => {
+      if (r.status === 202) return {fetching: true};
+      return r.json().then(d => Array.isArray(d) ? {items: d} : {fetching: true});
+    })
+    .then(result => {
       const container = document.getElementById('globalNewsList');
       const loading = document.getElementById('globalNewsLoading');
       if (loading) loading.style.display = 'none';
       if (!articles.length) {
-        container.innerHTML = '<div class="empty-state"><i class="bi bi-globe"></i>No global news yet.<br><small class="text-muted">Run Analysis to fetch world market news</small></div>';
+        container.innerHTML = '<div class="empty-state"><i class="bi bi-cloud-download" style="color:var(--accent)"></i><div class="mt-2" style="font-size:13px">Fetching global market news…</div><div class="text-muted mt-1" style="font-size:12px">Auto-retrying in 20s…</div></div>';
+        setTimeout(() => { globalNewsLoaded = false; loadGlobalNews(); }, 20000);
         return;
       }
-      container.innerHTML = articles.map(n => `
-        <div class="mm-news-item">
-          <div class="mm-news-dot ${n.sentiment==='POSITIVE'?'dot-pos':n.sentiment==='NEGATIVE'?'dot-neg':'dot-neu'}"></div>
-          <div style="min-width:0">
-            <div class="mm-news-title">
-              <a href="${n.url}" target="_blank" rel="noopener">
-                ${(n.title||'').slice(0,100)}${n.title&&n.title.length>100?'…':''}
-              </a>
-            </div>
-            <div class="mm-news-meta">${n.source||'Global'} · ${(n.published_at||'').slice(0,10)}</div>
-          </div>
-        </div>
-      `).join('');
+      container.innerHTML = result.items.map(n => _newsItemHtml(n)).join('');
     })
     .catch(() => {
       document.getElementById('globalNewsLoading').innerHTML = '<span class="text-muted small">Failed to load global news</span>';
@@ -312,13 +380,28 @@ function loadSuggestions(isAutoLoad) {
       document.getElementById('suggLoading').style.display = 'none';
       document.getElementById('suggBtn').disabled = false;
 
+      // Server is actively fetching news from feeds (202 response)
+      if (data.fetching) {
+        const emptyEl = document.getElementById('suggEmpty');
+        emptyEl.style.display = 'block';
+        emptyEl.innerHTML =
+          `<i class="bi bi-cloud-download" style="color:var(--accent);font-size:1.4rem"></i>
+           <div class="mt-2 fw-semibold" style="font-size:13px">Fetching latest market news…</div>
+           <div class="text-muted mt-1" style="font-size:12px">News is being pulled from RSS feeds. Auto-retrying in 20s…</div>
+           <button class="mm-btn-primary mt-3" style="font-size:12px;padding:5px 14px" onclick="loadSuggestions()">
+             <i class="bi bi-arrow-clockwise me-1"></i>Retry Now
+           </button>`;
+        if (isAutoLoad !== false) {
+          setTimeout(() => loadSuggestions(false), 20000);
+        }
+        return;
+      }
+
       // AI provider overloaded (503), permission denied (403), or explicit error
       if (data.error) {
         const errStr = (data.error + (data.message || '')).toLowerCase();
         const is503  = errStr.includes('503') || errStr.includes('high demand') || errStr.includes('unavailable');
         const is403  = data.error === 'permission_denied' || errStr.includes('403') || errStr.includes('permission');
-        const emptyEl = document.getElementById('suggEmpty');
-        emptyEl.style.display = 'block';
         if (is403) {
           emptyEl.innerHTML =
             `<i class="bi bi-key" style="color:#f59e0b;font-size:1.4rem"></i>
@@ -404,8 +487,48 @@ function loadSuggestions(isAutoLoad) {
     });
 }
 
+// ── Startup status poller ─────────────────────────────────────────────────────
+// When the DB is empty on first load, poll /api/startup/status every 10s.
+// Once news or market data is available, reload the page to show real data.
+(function() {
+  const banner = document.getElementById('firstRunBanner');
+  if (!banner) return;   // no banner = DB already has data, skip polling
+
+  let _pollCount = 0;
+  function pollStartupStatus() {
+    fetch('/api/startup/status')
+      .then(r => r.json())
+      .then(s => {
+        _pollCount++;
+        if (s.has_news || s.total_stocks_tracked > 0) {
+          // Data is now available — reload to show it
+          location.reload();
+          return;
+        }
+        if (_pollCount < 18) {   // poll for up to ~3 minutes
+          setTimeout(pollStartupStatus, 10000);
+        } else {
+          // Give up polling, show manual refresh hint
+          banner.innerHTML =
+            `<i class="bi bi-exclamation-circle text-accent" style="flex-shrink:0;font-size:1.4rem"></i>
+             <div style="flex:1">
+               <div class="fw-semibold" style="color:var(--accent);font-size:14px">Data fetch is taking longer than expected</div>
+               <div class="text-muted mt-1" style="font-size:12px">Check your internet connection, then run the full pipeline or refresh the page.</div>
+             </div>
+             <button class="mm-btn-primary" style="font-size:12px;padding:5px 14px" onclick="location.reload()">
+               <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+             </button>`;
+        }
+      })
+      .catch(() => { if (_pollCount < 18) setTimeout(pollStartupStatus, 10000); });
+  }
+  setTimeout(pollStartupStatus, 10000);   // first poll after 10s
+})();
+
 // Auto-load AI news suggestions on page load (marked as auto so 503 triggers retry)
 document.addEventListener('DOMContentLoaded', () => {
+  // Always refresh Indian news via AJAX (handles empty DB on first run)
+  loadIndianNews(0);
   setTimeout(() => loadSuggestions(true), 1500);
 });
 </script>

@@ -300,8 +300,22 @@ function pollPipelineStatus() {
       if (!d.running) {
         clearInterval(iv);
         setBadge('done','Done ✓');
-        showToast('Analysis complete – refreshing…', 'success');
-        setTimeout(()=>location.reload(), 2000);
+
+        // Show email delivery result
+        const lr = d.last_result || {};
+        if (lr.email_status === 'success') {
+          const to = (lr.email_sent_to || []).join(', ');
+          showToast(`Analysis complete — Email sent to: ${to}`, 'success');
+        } else if (lr.email_status === 'skipped') {
+          const reason = lr.email_reason || 'no recipients configured';
+          showToast(`Analysis complete — Email skipped (${reason})`, 'warn');
+        } else if (lr.email_status === 'error') {
+          showToast(`Analysis complete — Email failed: ${lr.email_error || 'unknown error'}`, 'error');
+        } else {
+          showToast('Analysis complete – refreshing…', 'success');
+        }
+
+        setTimeout(()=>location.reload(), 3000);
       }
     } catch { clearInterval(iv); setBadge('idle','Idle'); }
   }, 3000);

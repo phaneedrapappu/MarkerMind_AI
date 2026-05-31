@@ -55,7 +55,8 @@ class EmailAlertAgent(BaseAgent):
         self.username: Optional[str] = os.getenv("SMTP_USER")
         self.password: Optional[str] = os.getenv("SMTP_PASSWORD")
 
-        self.sender: str = smtp_cfg.get("sender", self.username or "marketmind@example.com")
+        # Always use SMTP_USER as the From address — Gmail rejects if From ≠ authenticated account
+        self.sender: str = self.username or smtp_cfg.get("sender", "marketmind@example.com")
         self.recipients: List[str] = smtp_cfg.get("recipients", [])
         # Optional unsubscribe URL injected per-subscriber at runtime
         self.unsubscribe_url: str = config.get("unsubscribe_url", "")

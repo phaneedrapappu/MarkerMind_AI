@@ -177,21 +177,34 @@ class MarketDataAgent(BaseAgent):
         return snapshot
 
     def _fetch_via_yfinance(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch basic quote data from Yahoo Finance (NS suffix for NSE stocks)."""
+        """Fetch basic quote data from Yahoo Finance (NS suffix for NSE stocks).
+
+        Uses period='5d' so the last trading day is always available even on
+        weekends and public holidays (period='1d' returns empty on non-trading days).
+        """
         try:
             ticker_sym = f"{symbol}.NS"
             ticker = yf.Ticker(ticker_sym)
-            info = ticker.fast_info
-            hist = ticker.history(period="1d")
+            # Use 5d so weekend/holiday runs still get the last trading session
+            hist = ticker.history(period="5d")
             if hist.empty:
                 return None
             row = hist.iloc[-1]
-            prev_close = info.previous_close or row["Close"]
+            # fast_info may throw a JSONDecodeError on weekends — fall back gracefully
+            try:
+                prev_close = ticker.fast_info.previous_close or row["Close"]
+            except Exception:
+                prev_close = row["Close"]
             change = row["Close"] - prev_close
             change_pct = (change / prev_close * 100) if prev_close else 0
+            # ticker.info can also be slow/empty on weekends; use symbol as fallback
+            try:
+                company_name = ticker.info.get("longName", symbol)
+            except Exception:
+                company_name = symbol
             return {
                 "symbol": symbol.upper(),
-                "company_name": ticker.info.get("longName", symbol),
+                "company_name": company_name,
                 "timestamp": datetime.now(),
                 "price": float(row["Close"]),
                 "open": float(row["Open"]),
