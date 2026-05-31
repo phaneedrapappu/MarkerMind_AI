@@ -459,7 +459,7 @@ class DatabaseManager:
     # ── Subscribers ─────────────────────────────────────────────────────────
 
     def save_subscriber(self, email: str, stocks: List[str]) -> Dict[str, Any]:
-        """Upsert subscriber. Returns the record dict plus an 'is_new' boolean."""
+        """Upsert subscriber. Returns the record dict plus an 'is_new' boolean and unsubscribe_token."""
         with self.session() as sess:
             existing = sess.query(SubscriberRecord).filter_by(email=email).first()
             if existing:
@@ -604,11 +604,14 @@ class DatabaseManager:
     def create_user_with_password(self, username: str, email: str, password: str) -> Dict[str, Any]:
         """
         Hash the password internally and create the user record.
-        Keeps bcrypt out of the view/route layer so the plaintext password
-        and resulting hash never propagate beyond the DB layer.
+        Uses bcrypt when available; falls back to werkzeug pbkdf2 otherwise.
         """
-        import bcrypt as _bcrypt
-        ph = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+        try:
+            import bcrypt as _bcrypt
+            ph = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+        except ImportError:
+            from werkzeug.security import generate_password_hash
+            ph = generate_password_hash(password)
         return self.create_user(username, email, ph)
 
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
@@ -623,17 +626,23 @@ class DatabaseManager:
 
     def verify_user_password(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """
-        Check email + password against the stored bcrypt hash.
-        Password verification is done here so the hash never leaves the DB layer.
+        Check email + password against the stored hash.
+        Supports both bcrypt and werkzeug pbkdf2 hashes transparently.
         Returns the safe user dict (no password_hash) on success, None on failure.
         """
-        import bcrypt as _bcrypt
         with self.session() as sess:
             u = sess.query(UserRecord).filter_by(email=email, is_active=True).first()
             if not u:
                 return None
             try:
-                match = _bcrypt.checkpw(password.encode(), u.password_hash.encode())
+                stored = u.password_hash
+                # Detect hash type by prefix
+                if stored.startswith("$2b$") or stored.startswith("$2a$"):
+                    import bcrypt as _bcrypt
+                    match = _bcrypt.checkpw(password.encode(), stored.encode())
+                else:
+                    from werkzeug.security import check_password_hash
+                    match = check_password_hash(stored, password)
             except Exception:
                 return None
             return self._to_dict(u) if match else None
