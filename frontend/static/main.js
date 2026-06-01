@@ -209,28 +209,48 @@ function renderEmailTags() {
 }
 
 function handleEmailKey(e) {
-  if (e.key === 'Enter' || e.key === ',') {
+  if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
     e.preventDefault();
-    addEmailTag(e.target.value.replace(',',''));
+    e.stopPropagation();
+    addEmailTag(e.target.value.replace(/[, ]$/,''));
   } else if (e.key === 'Backspace' && !e.target.value && _emailTags.length) {
     removeEmailTag(_emailTags[_emailTags.length-1]);
   }
 }
 
+// Fallback: catch Enter on keyup in case keydown was swallowed (e.g. browser autocomplete)
+function handleEmailKeyUp(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.target.value.trim()) addEmailTag(e.target.value.replace(',',''));
+  }
+}
+
+function handleEmailBlur(input) {
+  if (input.value.trim()) addEmailTag(input.value.replace(',',''));
+}
+
 function handleEmailInput(input) {
-  if (input.value.endsWith(',')) addEmailTag(input.value.slice(0,-1));
+  if (input.value.endsWith(',') || input.value.endsWith(' ')) addEmailTag(input.value.slice(0,-1));
+  else updateRunSummary();  // re-evaluate button on every keystroke
 }
 
 function updateRunSummary() {
   const sc = _selectedStocks.size, ec = _emailTags.length;
+  // Also count a valid email that is typed but not yet confirmed as a tag
+  const inp = document.getElementById('emailInput');
+  const typedEmail = inp ? inp.value.trim() : '';
+  const typedValid = typedEmail.includes('@') && typedEmail.includes('.');
+  const ecEffective = ec + (typedValid ? 1 : 0);
   const tgLoading = _tgSubscribers === -1;
   const tgReady   = _tgSubscribers > 0;
-  const hasOutput = ec > 0 || tgReady;
+  const hasOutput = ecEffective > 0 || tgReady;
   const summaryEl = document.getElementById('runSummary');
   const runBtn    = document.getElementById('runBtn');
 
   if (summaryEl) {
-    if (tgLoading && !ec) {
+    if (tgLoading && !ecEffective) {
       // Still waiting for Telegram status, no email either — show a spinner
       summaryEl.innerHTML =
         '<span class="text-muted">' +
@@ -247,7 +267,7 @@ function updateRunSummary() {
         'and add stocks to your Watchlist</span>';
     } else {
       const parts = [];
-      if (ec)      parts.push(`<span class="text-accent">${ec}</span> email(s)`);
+      if (ecEffective) parts.push(`<span class="text-accent">${ecEffective}</span> email(s)`);
       if (tgReady) parts.push(
         `<i class="bi bi-telegram me-1"></i>` +
         `<span class="text-accent">${_tgSubscribers}</span> Telegram subscriber(s)`
@@ -259,10 +279,13 @@ function updateRunSummary() {
   }
 
   // Run enabled only when: stocks chosen AND at least one output ready AND not still loading
-  if (runBtn) runBtn.disabled = tgLoading ? !ec : (!sc || !hasOutput);
+  if (runBtn) runBtn.disabled = tgLoading ? !ecEffective : (!sc || !hasOutput);
 }
 
 async function launchPipeline() {
+  // Auto-confirm any email still typed but not yet added as a tag
+  const inp = document.getElementById('emailInput');
+  if (inp && inp.value.trim()) addEmailTag(inp.value);
   const stocks = [..._selectedStocks];
   const emails = [..._emailTags];  // may be empty — email is optional
   if (!stocks.length) { showToast('Select at least 1 stock', 'warn'); return; }
