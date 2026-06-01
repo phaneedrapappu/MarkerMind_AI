@@ -189,9 +189,13 @@ class AgentOrchestrator:
             self.logger.warning("No live market data – attempting DB fallback …")
             market_data = self._load_market_data_from_db()
             if not market_data:
-                self.logger.warning("No market data in DB either – aborting pipeline")
-                return results
-            self.logger.info(f"DB fallback: loaded {len(market_data)} cached snapshot(s)")
+                self.logger.warning(
+                    "No market data in DB either – continuing with news/AI-only pipeline"
+                )
+                # Do NOT abort: news agent + AI analysis can still generate signals
+                # from news alone, and email/Telegram alerts can still be sent.
+            else:
+                self.logger.info(f"DB fallback: loaded {len(market_data)} cached snapshot(s)")
 
         # ── Stage 2: News ─────────────────────────────────────────────────────
         news: List[Dict] = []

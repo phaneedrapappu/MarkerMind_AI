@@ -558,6 +558,16 @@ def api_run_pipeline():
         except Exception as _sub_exc:
             app.logger.warning(f"[Run] Could not fetch subscribers: {_sub_exc}")
 
+        # If still no recipients, fall back to the logged-in user's own email
+        if not overrides.get("recipients"):
+            try:
+                user_email = getattr(current_user, "email", None)
+                if user_email:
+                    overrides["recipients"] = [user_email]
+                    app.logger.info(f"[Run] No subscribers — falling back to logged-in user email: {user_email}")
+            except Exception:
+                pass
+
     # Always pass the current host URL so unsubscribe links work outside localhost
     overrides["app_url"] = request.host_url.rstrip("/")
 
@@ -1073,9 +1083,81 @@ NIFTY50_SYMBOLS = [
 ]
 
 def _yf_sym(sym: str) -> str:
-    """Convert NSE symbol to Yahoo Finance .NS format."""
-    # Do NOT URL-encode — Yahoo Finance expects M&M.NS, not M%26M.NS
+    """Convert NSE symbol to Yahoo Finance ticker format.
+    Index symbols (starting with ^) are left as-is; others get .NS suffix.
+    """
+    if sym.startswith("^"):
+        return sym
     return sym if sym.endswith(".NS") else sym + ".NS"
+
+
+_YAHOO_API_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
+
+def _yahoo_chart(sym: str, range_: str = "5d", interval: str = "1d") -> dict | None:
+    """
+    Direct HTTP call to Yahoo Finance v8 chart API.
+    Returns the raw 'result[0]' dict, or None on failure.
+    Bypasses yfinance entirely — works even when yfinance is broken.
+    """
+    ticker_sym = _yf_sym(sym)
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}"
+        f"?range={range_}&interval={interval}&includePrePost=false"
+    )
+    try:
+        import requests as _req
+        resp = _req.get(url, headers=_YAHOO_API_HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        results = (data.get("chart") or {}).get("result") or []
+        return results[0] if results else None
+    except Exception:
+        return None
+
+
+def _yahoo_quote(sym: str) -> dict | None:
+    """Return a simple quote dict for a single NSE symbol via direct Yahoo API."""
+    result = _yahoo_chart(sym, range_="5d", interval="1d")
+    if not result:
+        return None
+    try:
+        meta = result["meta"]
+        price = float(meta.get("regularMarketPrice") or 0)
+        prev  = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
+        change = price - prev
+        change_pct = (change / prev * 100) if prev else 0.0
+        indicators = result.get("indicators", {}).get("quote", [{}])[0]
+        opens   = indicators.get("open")   or []
+        highs   = indicators.get("high")   or []
+        lows    = indicators.get("low")    or []
+        volumes = indicators.get("volume") or []
+        closes  = indicators.get("close")  or []
+        return {
+            "symbol":       sym.upper(),
+            "price":        round(price, 2),
+            "change":       round(change, 2),
+            "change_pct":   round(change_pct, 2),
+            "open":         round(float(opens[-1]),   2) if opens   else None,
+            "day_high":     round(float(highs[-1]),   2) if highs   else None,
+            "day_low":      round(float(lows[-1]),    2) if lows    else None,
+            "prev_close":   round(prev, 2),
+            "volume":       int(volumes[-1]) if volumes else None,
+            "last_close":   round(float(closes[-1]),  2) if closes  else None,
+            "market_cap":   int(meta.get("marketCap") or 0) or None,
+            "year_high":    round(float(meta.get("fiftyTwoWeekHigh") or 0), 2) or None,
+            "year_low":     round(float(meta.get("fiftyTwoWeekLow")  or 0), 2) or None,
+        }
+    except Exception:
+        return None
 
 
 @app.route("/stocks")
@@ -1097,19 +1179,19 @@ def api_stock_range(symbol: str):
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < 600:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        df = yf.download(_yf_sym(sym), period=period, interval=interval,
-                         progress=False, auto_adjust=True)
-        if df.empty:
+        result = _yahoo_chart(sym, range_=period, interval=interval)
+        if not result:
             return jsonify([])
+        timestamps = result.get("timestamp") or []
+        indicators  = result.get("indicators", {}).get("quote", [{}])[0]
+        closes = indicators.get("close") or []
+        fmt = "%d %b" if interval in ("1d", "1wk") else "%H:%M"
+        import datetime as _dt
         records = []
-        for ts, row in df.iterrows():
-            try:
-                cv = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
-                records.append({"t": ts.strftime("%d %b" if interval in ("1d","1wk") else "%H:%M"),
-                                 "c": round(cv, 2)})
-            except Exception:
+        for ts, cv in zip(timestamps, closes):
+            if cv is None:
                 continue
+            records.append({"t": _dt.datetime.utcfromtimestamp(ts).strftime(fmt), "c": round(float(cv), 2)})
         _live_cache[cache_key] = {"ts": now, "data": records}
         return jsonify(records)
     except Exception as exc:
@@ -1119,62 +1201,42 @@ def api_stock_range(symbol: str):
 
 @app.route("/api/stock/<symbol>/live")
 def api_stock_live(symbol: str):
-    """Live quote for a single NSE stock using yfinance (1-min cache)."""
+    """Live quote for a single NSE stock via direct Yahoo Finance API (1-min cache)."""
     sym = symbol.upper()
     cache_key = f"live_{sym}"
     now = _time.time()
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
         return jsonify(_live_cache[cache_key]["data"])
-    try:
-        import yfinance as yf
-        fi = yf.Ticker(_yf_sym(sym)).fast_info
-        change = fi.last_price - fi.previous_close
-        change_pct = (change / fi.previous_close * 100) if fi.previous_close else 0
-        data = {
-            "symbol": sym,
-            "price": round(fi.last_price, 2),
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "open": round(fi.open, 2) if fi.open else None,
-            "day_high": round(fi.day_high, 2) if fi.day_high else None,
-            "day_low": round(fi.day_low, 2) if fi.day_low else None,
-            "prev_close": round(fi.previous_close, 2),
-            "year_high": round(fi.year_high, 2) if fi.year_high else None,
-            "year_low": round(fi.year_low, 2) if fi.year_low else None,
-            "volume": int(fi.last_volume) if fi.last_volume else None,
-            "avg_volume": int(fi.three_month_average_volume) if fi.three_month_average_volume else None,
-            "market_cap": int(fi.market_cap) if fi.market_cap else None,
-            "year_change_pct": round(fi.year_change * 100, 2) if fi.year_change else None,
-        }
-        _live_cache[cache_key] = {"ts": now, "data": data}
-        return jsonify(data)
-    except Exception as exc:
-        app.logger.error(f"Live quote error for {sym}: {exc}")
-        return jsonify({"error": str(exc)}), 500
+    data = _yahoo_quote(sym)
+    if not data:
+        return jsonify({"error": f"No data for {sym}"}), 500
+    _live_cache[cache_key] = {"ts": now, "data": data}
+    return jsonify(data)
 
 
 @app.route("/api/stock/<symbol>/intraday")
 def api_stock_intraday(symbol: str):
-    """Intraday price history (1-min intervals, last 1 day)."""
+    """Intraday price history (5-min intervals, last 1 day) via direct Yahoo Finance API."""
     sym = symbol.upper()
     cache_key = f"intraday_{sym}"
     now = _time.time()
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        df = yf.download(_yf_sym(sym), period="1d", interval="5m",
-                         progress=False, auto_adjust=True)
-        if df.empty:
+        result = _yahoo_chart(sym, range_="1d", interval="5m")
+        if not result:
             return jsonify([])
+        timestamps = result.get("timestamp") or []
+        indicators  = result.get("indicators", {}).get("quote", [{}])[0]
+        closes  = indicators.get("close")  or []
+        volumes = indicators.get("volume") or []
+        import datetime as _dt
         records = []
-        for ts, row in df.iterrows():
-            try:
-                close_val = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
-                vol_val   = int(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else int(row["Volume"])
-                records.append({"t": ts.strftime("%H:%M"), "c": round(close_val, 2), "v": vol_val})
-            except Exception:
+        for ts, cv, vol in zip(timestamps, closes, volumes or [None]*len(closes)):
+            if cv is None:
                 continue
+            records.append({"t": _dt.datetime.utcfromtimestamp(ts).strftime("%H:%M"),
+                            "c": round(float(cv), 2), "v": int(vol) if vol else 0})
         _live_cache[cache_key] = {"ts": now, "data": records}
         return jsonify(records)
     except Exception as exc:
@@ -1184,51 +1246,32 @@ def api_stock_intraday(symbol: str):
 
 @app.route("/api/stocks/movers")
 def api_stocks_movers():
-    """Top gainers & losers from Nifty 50 (5-min cache)."""
+    """Top gainers & losers from Nifty 50 via direct Yahoo Finance API (5-min cache)."""
     now = _time.time()
     if "movers" in _live_cache and now - _live_cache["movers"]["ts"] < _MOVERS_CACHE_SECS:
         return jsonify(_live_cache["movers"]["data"])
     try:
-        import yfinance as yf
         symbols = NIFTY50_SYMBOLS[:30]
-        yf_syms = [_yf_sym(s) for s in symbols]
-
-        # group_by='ticker' works reliably across yfinance 0.2.x versions
-        df = yf.download(
-            yf_syms, period="5d", interval="1d",
-            progress=False, auto_adjust=True, group_by="ticker"
-        )
-
         results = []
-        for sym, yfs in zip(symbols, yf_syms):
-            try:
-                # With group_by='ticker': df[ticker_sym]["Close"]
-                if yfs in df.columns.get_level_values(0):
-                    col = df[yfs]["Close"]
-                else:
-                    continue
-                vals = col.dropna().values
-                if len(vals) < 2:
-                    continue
-                prev_p, last_p = float(vals[-2]), float(vals[-1])
-                chg_pct = (last_p - prev_p) / prev_p * 100 if prev_p else 0
-                results.append({
-                    "symbol": sym, "price": round(last_p, 2),
-                    "change_pct": round(chg_pct, 2),
-                    "change": round(last_p - prev_p, 2),
-                })
-            except Exception as sym_exc:
-                app.logger.debug(f"Movers skip {sym}: {sym_exc}")
-                continue
+        import concurrent.futures
+        def _fetch_one(sym):
+            q = _yahoo_quote(sym)
+            if q and q.get("price"):
+                return {"symbol": sym, "price": q["price"],
+                        "change_pct": q["change_pct"], "change": q["change"]}
+            return None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            for res in pool.map(_fetch_one, symbols):
+                if res:
+                    results.append(res)
 
         if not results:
-            raise ValueError("All symbols returned empty data from yfinance")
+            return jsonify({"gainers": [], "losers": []})
 
         results.sort(key=lambda x: x["change_pct"], reverse=True)
         gainers = [r for r in results if r["change_pct"] > 0][:8]
         losers  = sorted([r for r in results if r["change_pct"] < 0],
                          key=lambda x: x["change_pct"])[:8]
-        # Weekend / market closed: still show top/bottom movers
         if not gainers and not losers and results:
             gainers = results[:5]
             losers  = results[-5:]
