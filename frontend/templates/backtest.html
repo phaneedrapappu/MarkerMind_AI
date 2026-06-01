@@ -20,7 +20,15 @@
         <i class="bi bi-play-fill me-1"></i>Run Backtest
       </button>
     </div>
-  </div>
+    <div id="btError" class="mt-3" style="display:none">
+      <div class="d-flex align-items-start gap-2 p-3 rounded" style="background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.3)">
+        <i class="bi bi-exclamation-circle text-danger mt-1" style="flex-shrink:0"></i>
+        <div>
+          <div class="fw-semibold" style="color:#f87171;font-size:13px" id="btErrorTitle">No signals found</div>
+          <div class="text-muted mt-1" style="font-size:12px" id="btErrorMsg">Run the AI pipeline first to generate trading signals for this stock.</div>
+        </div>
+      </div>
+    </div>
 
   <!-- Stats row -->
   <div class="row g-3 mb-4" id="btStats" style="display:none!important">
@@ -105,9 +113,19 @@ async function runBacktest() {
   btn.disabled = false;
 
   if (data.error) {
-    alert('No signals found for ' + sym + '. Run the AI pipeline first.');
+    const errEl = document.getElementById('btError');
+    const errTitle = document.getElementById('btErrorTitle');
+    const errMsg   = document.getElementById('btErrorMsg');
+    errTitle.textContent = data.error === 'no_signals'
+      ? `No signals found for ${sym}`
+      : 'Backtest failed';
+    errMsg.textContent = data.error === 'no_signals'
+      ? 'Run the AI pipeline first to generate trading signals for this stock.'
+      : (data.message || data.error);
+    errEl.style.display = '';
     return;
   }
+  document.getElementById('btError').style.display = 'none';
 
   // Stats
   document.getElementById('btTotal').textContent = data.total_trades;

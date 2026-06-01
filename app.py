@@ -121,6 +121,61 @@ CONFIG_PATH = str(ROOT / "config" / "config.yaml")
 _db: DatabaseManager = None
 _pipeline_lock = threading.Lock()
 _pipeline_running = False
+_last_pipeline_result: dict = {}
+_news_fetch_lock = threading.Lock()
+_news_fetching = False
+_market_fetch_lock = threading.Lock()
+_market_fetching = False
+
+
+def _fetch_news_standalone():
+    """Run only the NewsAgent in a background thread to populate news without a full pipeline."""
+    global _news_fetching
+    if not _news_fetch_lock.acquire(blocking=False):
+        return  # already running
+    _news_fetching = True
+    try:
+        import yaml
+        from src.agents.news_agent import NewsAgent
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f)
+        agent_cfgs = cfg.get("agents", {})
+        stocks = agent_cfgs.get("market_data_agent", {}).get("stocks", [])
+        news_cfg = agent_cfgs.get("news_agent", {})
+        news_cfg.setdefault("stocks", stocks)
+        db = get_db()
+        agent = NewsAgent(news_cfg, db_manager=db)
+        if agent.initialize():
+            agent.execute()
+    except Exception as exc:
+        app.logger.warning(f"Standalone news fetch error: {exc}")
+    finally:
+        _news_fetching = False
+        _news_fetch_lock.release()
+
+
+def _fetch_market_data_standalone():
+    """Run only the MarketDataAgent in a background thread to populate stock prices."""
+    global _market_fetching
+    if not _market_fetch_lock.acquire(blocking=False):
+        return  # already running
+    _market_fetching = True
+    try:
+        import yaml
+        from src.agents.market_data_agent import MarketDataAgent
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f)
+        agent_cfgs = cfg.get("agents", {})
+        mda_cfg = agent_cfgs.get("market_data_agent", {})
+        db = get_db()
+        agent = MarketDataAgent(mda_cfg, db_manager=db)
+        if agent.initialize():
+            agent.execute()
+    except Exception as exc:
+        app.logger.warning(f"Standalone market data fetch error: {exc}")
+    finally:
+        _market_fetching = False
+        _market_fetch_lock.release()
 
 _IST = ZoneInfo("Asia/Kolkata")
 _NSE_OPEN = time(9, 15)
@@ -362,6 +417,11 @@ def dashboard():
     if not news:
         news = _fetch_live_news_and_save(db)[:10]
     alerts = db.get_recent_alerts(5)
+    # Auto-fetch in the background if DB has no data yet
+    if not news:
+        threading.Thread(target=_fetch_news_standalone, daemon=True).start()
+    if not summary["total_stocks_tracked"]:
+        threading.Thread(target=_fetch_market_data_standalone, daemon=True).start()
     return render_template(
         "dashboard.html",
         summary=summary,
@@ -480,24 +540,63 @@ def api_run_pipeline():
             overrides["stocks"] = [s.strip().upper() for s in body["stocks"].split(",") if s.strip()]
         else:
             overrides["stocks"] = [s.strip().upper() for s in body["stocks"] if s.strip()]
-    # Email is optional — if not supplied the pipeline skips sending email
+    # Email — if supplied use those; if omitted, fall back to all active DB subscribers
     if body.get("email"):
         if isinstance(body["email"], str):
             overrides["recipients"] = [e.strip() for e in body["email"].split(",") if e.strip()]
         else:
             overrides["recipients"] = [e.strip() for e in body["email"] if e.strip()]
+    else:
+        # Auto-include every active subscriber so manual runs also trigger delivery
+        try:
+            _db_for_subs = get_db()
+            active_subs = _db_for_subs.get_active_subscribers()
+            sub_emails = [s["email"] for s in active_subs if s.get("email")]
+            if sub_emails:
+                overrides["recipients"] = sub_emails
+                app.logger.info(f"[Run] Auto-adding {len(sub_emails)} DB subscriber(s) as recipients")
+        except Exception as _sub_exc:
+            app.logger.warning(f"[Run] Could not fetch subscribers: {_sub_exc}")
+
+        # If still no recipients, fall back to the logged-in user's own email
+        if not overrides.get("recipients"):
+            try:
+                user_email = getattr(current_user, "email", None)
+                if user_email:
+                    overrides["recipients"] = [user_email]
+                    app.logger.info(f"[Run] No subscribers — falling back to logged-in user email: {user_email}")
+            except Exception:
+                pass
+
+    # Always pass the current host URL so unsubscribe links work outside localhost
+    overrides["app_url"] = request.host_url.rstrip("/")
 
     # Capture the explicit stocks chosen in the modal for use in Telegram alerts
     explicit_stocks = list(overrides.get("stocks", []))
 
     def _run():
-        global _pipeline_running
+        global _pipeline_running, _last_pipeline_result
         try:
             orch = AgentOrchestrator(CONFIG_PATH)
             orch.apply_overrides(overrides)
             orch.initialize_agents()
-            orch.run_agents()
+            pipeline_result = orch.run_agents()
             orch.stop_agents()
+            # Store result for frontend polling
+            email_res = pipeline_result.get("email_alert_agent", {})
+            _last_pipeline_result = {
+                "signals": pipeline_result.get("signal_generator_agent", {}).get("signal_count", 0),
+                "email_status": email_res.get("status", "not_run"),
+                "email_sent_to": email_res.get("recipients", []),
+                "email_reason": email_res.get("reason", ""),
+                "email_error": email_res.get("error", ""),
+            }
+            if email_res.get("status") == "error":
+                app.logger.error(f"[Run] Email send failed: {email_res.get('error')}")
+            elif email_res.get("status") == "skipped":
+                app.logger.warning(f"[Run] Email skipped: {email_res.get('reason')}")
+            else:
+                app.logger.info(f"[Run] Email sent to: {email_res.get('recipients', [])}")
             # Send Telegram alerts.
             # For manual runs, pass the explicit stock list so every subscribed
             # user gets alerts for what they chose — regardless of watchlist.
@@ -508,6 +607,9 @@ def api_run_pipeline():
                 send_pipeline_alerts(db, signals, explicit_symbols=explicit_stocks or None)
             except Exception as tg_exc:
                 app.logger.warning(f"Telegram alert error: {tg_exc}")
+        except Exception as run_exc:
+            app.logger.error(f"[Run] Pipeline error: {run_exc}")
+            _last_pipeline_result = {"email_status": "error", "email_error": str(run_exc)}
         finally:
             _pipeline_running = False
             _pipeline_lock.release()
@@ -518,7 +620,20 @@ def api_run_pipeline():
 
 @app.route("/api/pipeline/status")
 def api_pipeline_status():
-    return jsonify({"running": _pipeline_running})
+    return jsonify({"running": _pipeline_running, "last_result": _last_pipeline_result})
+
+
+@app.route("/api/startup/status")
+def api_startup_status():
+    """Return current state of background startup data fetches."""
+    db = get_db()
+    summary = db.get_dashboard_summary()
+    return jsonify({
+        "fetching_news":        _news_fetching,
+        "fetching_market":      _market_fetching,
+        "has_news":             bool(db.get_news(limit=1)),
+        "total_stocks_tracked": summary["total_stocks_tracked"],
+    })
 
 
 @app.route("/api/market/status")
@@ -809,7 +924,12 @@ def api_news_suggestions():
     all_news = indian_news + global_news
 
     if not all_news:
-        return jsonify({"error": "Could not fetch news. Check your internet connection."}), 503
+        # Auto-trigger a background news fetch so subsequent calls will have data
+        threading.Thread(target=_fetch_news_standalone, daemon=True).start()
+        return jsonify({
+            "error": "Fetching news from market feeds — please retry in a moment.",
+            "fetching": True,
+        }), 202
 
     headlines = []
     for n in all_news[:35]:
@@ -963,9 +1083,81 @@ NIFTY50_SYMBOLS = [
 ]
 
 def _yf_sym(sym: str) -> str:
-    """Convert NSE symbol to Yahoo Finance .NS format."""
-    s = sym.replace("&", "%26")
-    return s if s.endswith(".NS") else s + ".NS"
+    """Convert NSE symbol to Yahoo Finance ticker format.
+    Index symbols (starting with ^) are left as-is; others get .NS suffix.
+    """
+    if sym.startswith("^"):
+        return sym
+    return sym if sym.endswith(".NS") else sym + ".NS"
+
+
+_YAHOO_API_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
+
+def _yahoo_chart(sym: str, range_: str = "5d", interval: str = "1d") -> dict | None:
+    """
+    Direct HTTP call to Yahoo Finance v8 chart API.
+    Returns the raw 'result[0]' dict, or None on failure.
+    Bypasses yfinance entirely — works even when yfinance is broken.
+    """
+    ticker_sym = _yf_sym(sym)
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}"
+        f"?range={range_}&interval={interval}&includePrePost=false"
+    )
+    try:
+        import requests as _req
+        resp = _req.get(url, headers=_YAHOO_API_HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        results = (data.get("chart") or {}).get("result") or []
+        return results[0] if results else None
+    except Exception:
+        return None
+
+
+def _yahoo_quote(sym: str) -> dict | None:
+    """Return a simple quote dict for a single NSE symbol via direct Yahoo API."""
+    result = _yahoo_chart(sym, range_="5d", interval="1d")
+    if not result:
+        return None
+    try:
+        meta = result["meta"]
+        price = float(meta.get("regularMarketPrice") or 0)
+        prev  = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
+        change = price - prev
+        change_pct = (change / prev * 100) if prev else 0.0
+        indicators = result.get("indicators", {}).get("quote", [{}])[0]
+        opens   = indicators.get("open")   or []
+        highs   = indicators.get("high")   or []
+        lows    = indicators.get("low")    or []
+        volumes = indicators.get("volume") or []
+        closes  = indicators.get("close")  or []
+        return {
+            "symbol":       sym.upper(),
+            "price":        round(price, 2),
+            "change":       round(change, 2),
+            "change_pct":   round(change_pct, 2),
+            "open":         round(float(opens[-1]),   2) if opens   else None,
+            "day_high":     round(float(highs[-1]),   2) if highs   else None,
+            "day_low":      round(float(lows[-1]),    2) if lows    else None,
+            "prev_close":   round(prev, 2),
+            "volume":       int(volumes[-1]) if volumes else None,
+            "last_close":   round(float(closes[-1]),  2) if closes  else None,
+            "market_cap":   int(meta.get("marketCap") or 0) or None,
+            "year_high":    round(float(meta.get("fiftyTwoWeekHigh") or 0), 2) or None,
+            "year_low":     round(float(meta.get("fiftyTwoWeekLow")  or 0), 2) or None,
+        }
+    except Exception:
+        return None
 
 
 @app.route("/stocks")
@@ -987,19 +1179,19 @@ def api_stock_range(symbol: str):
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < 600:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        df = yf.download(_yf_sym(sym), period=period, interval=interval,
-                         progress=False, auto_adjust=True)
-        if df.empty:
+        result = _yahoo_chart(sym, range_=period, interval=interval)
+        if not result:
             return jsonify([])
+        timestamps = result.get("timestamp") or []
+        indicators  = result.get("indicators", {}).get("quote", [{}])[0]
+        closes = indicators.get("close") or []
+        fmt = "%d %b" if interval in ("1d", "1wk") else "%H:%M"
+        import datetime as _dt
         records = []
-        for ts, row in df.iterrows():
-            try:
-                cv = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
-                records.append({"t": ts.strftime("%d %b" if interval in ("1d","1wk") else "%H:%M"),
-                                 "c": round(cv, 2)})
-            except Exception:
+        for ts, cv in zip(timestamps, closes):
+            if cv is None:
                 continue
+            records.append({"t": _dt.datetime.utcfromtimestamp(ts).strftime(fmt), "c": round(float(cv), 2)})
         _live_cache[cache_key] = {"ts": now, "data": records}
         return jsonify(records)
     except Exception as exc:
@@ -1009,62 +1201,42 @@ def api_stock_range(symbol: str):
 
 @app.route("/api/stock/<symbol>/live")
 def api_stock_live(symbol: str):
-    """Live quote for a single NSE stock using yfinance (1-min cache)."""
+    """Live quote for a single NSE stock via direct Yahoo Finance API (1-min cache)."""
     sym = symbol.upper()
     cache_key = f"live_{sym}"
     now = _time.time()
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
         return jsonify(_live_cache[cache_key]["data"])
-    try:
-        import yfinance as yf
-        fi = yf.Ticker(_yf_sym(sym)).fast_info
-        change = fi.last_price - fi.previous_close
-        change_pct = (change / fi.previous_close * 100) if fi.previous_close else 0
-        data = {
-            "symbol": sym,
-            "price": round(fi.last_price, 2),
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "open": round(fi.open, 2) if fi.open else None,
-            "day_high": round(fi.day_high, 2) if fi.day_high else None,
-            "day_low": round(fi.day_low, 2) if fi.day_low else None,
-            "prev_close": round(fi.previous_close, 2),
-            "year_high": round(fi.year_high, 2) if fi.year_high else None,
-            "year_low": round(fi.year_low, 2) if fi.year_low else None,
-            "volume": int(fi.last_volume) if fi.last_volume else None,
-            "avg_volume": int(fi.three_month_average_volume) if fi.three_month_average_volume else None,
-            "market_cap": int(fi.market_cap) if fi.market_cap else None,
-            "year_change_pct": round(fi.year_change * 100, 2) if fi.year_change else None,
-        }
-        _live_cache[cache_key] = {"ts": now, "data": data}
-        return jsonify(data)
-    except Exception as exc:
-        app.logger.error(f"Live quote error for {sym}: {exc}")
-        return jsonify({"error": str(exc)}), 500
+    data = _yahoo_quote(sym)
+    if not data:
+        return jsonify({"error": f"No data for {sym}"}), 500
+    _live_cache[cache_key] = {"ts": now, "data": data}
+    return jsonify(data)
 
 
 @app.route("/api/stock/<symbol>/intraday")
 def api_stock_intraday(symbol: str):
-    """Intraday price history (1-min intervals, last 1 day)."""
+    """Intraday price history (5-min intervals, last 1 day) via direct Yahoo Finance API."""
     sym = symbol.upper()
     cache_key = f"intraday_{sym}"
     now = _time.time()
     if cache_key in _live_cache and now - _live_cache[cache_key]["ts"] < _LIVE_CACHE_SECS:
         return jsonify(_live_cache[cache_key]["data"])
     try:
-        import yfinance as yf
-        df = yf.download(_yf_sym(sym), period="1d", interval="5m",
-                         progress=False, auto_adjust=True)
-        if df.empty:
+        result = _yahoo_chart(sym, range_="1d", interval="5m")
+        if not result:
             return jsonify([])
+        timestamps = result.get("timestamp") or []
+        indicators  = result.get("indicators", {}).get("quote", [{}])[0]
+        closes  = indicators.get("close")  or []
+        volumes = indicators.get("volume") or []
+        import datetime as _dt
         records = []
-        for ts, row in df.iterrows():
-            try:
-                close_val = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
-                vol_val   = int(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else int(row["Volume"])
-                records.append({"t": ts.strftime("%H:%M"), "c": round(close_val, 2), "v": vol_val})
-            except Exception:
+        for ts, cv, vol in zip(timestamps, closes, volumes or [None]*len(closes)):
+            if cv is None:
                 continue
+            records.append({"t": _dt.datetime.utcfromtimestamp(ts).strftime("%H:%M"),
+                            "c": round(float(cv), 2), "v": int(vol) if vol else 0})
         _live_cache[cache_key] = {"ts": now, "data": records}
         return jsonify(records)
     except Exception as exc:
@@ -1074,50 +1246,35 @@ def api_stock_intraday(symbol: str):
 
 @app.route("/api/stocks/movers")
 def api_stocks_movers():
-    """Top gainers & losers from Nifty 50 (5-min cache)."""
+    """Top gainers & losers from Nifty 50 via direct Yahoo Finance API (5-min cache)."""
     now = _time.time()
     if "movers" in _live_cache and now - _live_cache["movers"]["ts"] < _MOVERS_CACHE_SECS:
         return jsonify(_live_cache["movers"]["data"])
     try:
-        import yfinance as yf
-        symbols = NIFTY50_SYMBOLS[:35]
-        yf_syms = [_yf_sym(s) for s in symbols]
-        # Use 5d so weekends/holidays never leave us with < 2 trading days
-        df = yf.download(yf_syms, period="5d", interval="1d",
-                         progress=False, auto_adjust=True)
-        # yfinance returns a MultiIndex (Price, Ticker); slice out Close
-        if hasattr(df.columns, "levels"):
-            try:
-                close = df["Close"]
-            except KeyError:
-                close = df
-        else:
-            close = df.get("Close", df)
+        symbols = NIFTY50_SYMBOLS[:30]
         results = []
-        for sym, yfs in zip(symbols, yf_syms):
-            try:
-                col = None
-                if yfs in close.columns:
-                    col = close[yfs]
-                elif sym in close.columns:
-                    col = close[sym]
-                if col is None:
-                    continue
-                vals = col.dropna().values
-                if len(vals) < 2:
-                    continue
-                prev_p, last_p = float(vals[-2]), float(vals[-1])
-                chg_pct = (last_p - prev_p) / prev_p * 100 if prev_p else 0
-                results.append({
-                    "symbol": sym, "price": round(last_p, 2),
-                    "change_pct": round(chg_pct, 2), "change": round(last_p - prev_p, 2),
-                })
-            except Exception:
-                continue
+        import concurrent.futures
+        def _fetch_one(sym):
+            q = _yahoo_quote(sym)
+            if q and q.get("price"):
+                return {"symbol": sym, "price": q["price"],
+                        "change_pct": q["change_pct"], "change": q["change"]}
+            return None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            for res in pool.map(_fetch_one, symbols):
+                if res:
+                    results.append(res)
+
+        if not results:
+            return jsonify({"gainers": [], "losers": []})
+
         results.sort(key=lambda x: x["change_pct"], reverse=True)
         gainers = [r for r in results if r["change_pct"] > 0][:8]
         losers  = sorted([r for r in results if r["change_pct"] < 0],
                          key=lambda x: x["change_pct"])[:8]
+        if not gainers and not losers and results:
+            gainers = results[:5]
+            losers  = results[-5:]
         data = {"gainers": gainers, "losers": losers}
         _live_cache["movers"] = {"ts": now, "data": data}
         return jsonify(data)
@@ -1770,6 +1927,17 @@ def api_telegram_test():
 
 if __name__ == "__main__":
     _start_scheduler()
+
+    # Auto-fetch market data + news on first launch if the database is empty
+    _initial_db = get_db()
+    _has_market = bool(_initial_db.get_dashboard_summary()["total_stocks_tracked"])
+    _has_news   = bool(_initial_db.get_news(limit=1) or _initial_db.get_global_news(limit=1))
+    if not _has_market:
+        app.logger.info("No market data in database — auto-fetching stock prices on startup …")
+        threading.Thread(target=_fetch_market_data_standalone, daemon=True).start()
+    if not _has_news:
+        app.logger.info("No news in database — auto-fetching news on startup …")
+        threading.Thread(target=_fetch_news_standalone, daemon=True).start()
 
     # ── Telegram: polling vs webhook, auto-detected ───────────────────────────
     # - If TELEGRAM_WEBHOOK_URL is set in .env → register webhook with Telegram

@@ -2,8 +2,10 @@
 Market Data Agent - Fetches and processes market data.
 Primary source: NSE India API.
 Fallback: yfinance (Yahoo Finance) when NSE is unreachable.
+Secondary fallback: direct HTTP to Yahoo Finance chart API.
 """
 import logging
+import requests as _requests
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import time
@@ -177,34 +179,132 @@ class MarketDataAgent(BaseAgent):
         return snapshot
 
     def _fetch_via_yfinance(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch basic quote data from Yahoo Finance (NS suffix for NSE stocks)."""
+        """Fetch basic quote data for an NSE stock.
+
+        Strategy (first success wins):
+          1. yf.download()            – avoids Ticker() JSON-decode bugs
+          2. Ticker().history()       – classic yfinance approach
+          3. Direct Yahoo Finance API – raw HTTP, works when yfinance is blocked
+        """
+        ticker_sym = f"{symbol}.NS"
+
+        # ── attempt 1: yf.download ────────────────────────────────────────────
+        hist = None
+        if YFINANCE_AVAILABLE:
+            try:
+                import pandas as _pd
+                hist = yf.download(
+                    ticker_sym,
+                    period="5d",
+                    auto_adjust=True,
+                    progress=False,
+                    timeout=15,
+                )
+                # Newer yfinance returns MultiIndex columns for a single ticker
+                if hist is not None and not hist.empty and isinstance(hist.columns, _pd.MultiIndex):
+                    hist.columns = hist.columns.get_level_values(0)
+            except Exception as dl_exc:
+                self.logger.debug(f"yf.download failed for {ticker_sym}: {dl_exc}")
+                hist = None
+
+        # ── attempt 2: Ticker().history ───────────────────────────────────────
+        if (hist is None or hist.empty) and YFINANCE_AVAILABLE:
+            try:
+                ticker = yf.Ticker(ticker_sym)
+                hist = ticker.history(period="5d")
+            except Exception as hist_exc:
+                self.logger.debug(f"yfinance Ticker.history failed for {symbol}: {hist_exc}")
+                hist = None
+
+        # ── parse yfinance result if we got something ─────────────────────────
+        if hist is not None and not hist.empty:
+            try:
+                row = hist.iloc[-1]
+                prev_row = hist.iloc[-2] if len(hist) >= 2 else row
+                prev_close = float(prev_row["Close"])
+                close = float(row["Close"])
+                change = close - prev_close
+                change_pct = (change / prev_close * 100) if prev_close else 0.0
+                return {
+                    "symbol": symbol.upper(),
+                    "company_name": symbol,
+                    "timestamp": datetime.now(),
+                    "price": close,
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": close,
+                    "volume": int(row.get("Volume", 0)),
+                    "change": float(change),
+                    "change_percent": float(change_pct),
+                    "source": "Yahoo Finance",
+                }
+            except Exception as exc:
+                self.logger.debug(f"yfinance data parsing failed for {symbol}: {exc}")
+
+        # ── attempt 3: direct Yahoo Finance chart API ─────────────────────────
+        return self._fetch_via_yahoo_direct(symbol)
+
+    _YAHOO_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+
+    def _fetch_via_yahoo_direct(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Direct HTTP call to Yahoo Finance v8 chart API — bypasses yfinance."""
+        ticker_sym = f"{symbol}.NS"
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}"
+            f"?range=5d&interval=1d"
+        )
         try:
-            ticker_sym = f"{symbol}.NS"
-            ticker = yf.Ticker(ticker_sym)
-            info = ticker.fast_info
-            hist = ticker.history(period="1d")
-            if hist.empty:
+            resp = _requests.get(url, headers=self._YAHOO_HEADERS, timeout=15)
+            if resp.status_code != 200:
+                self.logger.warning(
+                    f"Yahoo direct API returned {resp.status_code} for {symbol}"
+                )
                 return None
-            row = hist.iloc[-1]
-            prev_close = info.previous_close or row["Close"]
-            change = row["Close"] - prev_close
-            change_pct = (change / prev_close * 100) if prev_close else 0
+            data = resp.json()
+            result = data.get("chart", {}).get("result") or []
+            if not result:
+                return None
+            meta = result[0].get("meta", {})
+            price = float(meta.get("regularMarketPrice") or 0)
+            prev_close = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
+            change = price - prev_close
+            change_pct = (change / prev_close * 100) if prev_close else 0.0
+            # Pull OHLV from the last indicator row if available
+            indicators = result[0].get("indicators", {}).get("quote", [{}])[0]
+            opens  = indicators.get("open")  or []
+            highs  = indicators.get("high")  or []
+            lows   = indicators.get("low")   or []
+            closes = indicators.get("close") or []
+            volumes = indicators.get("volume") or []
+            last_open   = float(opens[-1])   if opens   else price
+            last_high   = float(highs[-1])   if highs   else price
+            last_low    = float(lows[-1])    if lows    else price
+            last_close  = float(closes[-1])  if closes  else price
+            last_volume = int(volumes[-1])   if volumes else 0
             return {
                 "symbol": symbol.upper(),
-                "company_name": ticker.info.get("longName", symbol),
+                "company_name": meta.get("longName") or symbol,
                 "timestamp": datetime.now(),
-                "price": float(row["Close"]),
-                "open": float(row["Open"]),
-                "high": float(row["High"]),
-                "low": float(row["Low"]),
-                "close": float(row["Close"]),
-                "volume": int(row["Volume"]),
+                "price": price,
+                "open": last_open,
+                "high": last_high,
+                "low": last_low,
+                "close": last_close,
+                "volume": last_volume,
                 "change": float(change),
                 "change_percent": float(change_pct),
                 "source": "Yahoo Finance",
             }
         except Exception as exc:
-            self.logger.error(f"yfinance fetch failed for {symbol}: {exc}")
+            self.logger.error(f"Yahoo direct API failed for {symbol}: {exc}")
             return None
     
     def _parse_bulk_deals(self, deals_data: List[Dict], symbol: str) -> List[BulkBlockDeal]:

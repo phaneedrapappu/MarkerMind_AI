@@ -31,6 +31,9 @@ flask==3.0.2
 flask-cors==4.0.0
 flask-login>=0.6.3
 
+# Authentication
+bcrypt>=4.0.0
+
 # Scheduling
 apscheduler==3.10.4
 
