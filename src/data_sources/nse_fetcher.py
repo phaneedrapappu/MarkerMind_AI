@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 class NSEDataFetcher:
     """Fetches data from NSE (National Stock Exchange of India)"""
     
-    def __init__(self, timeout: int = 30):
+    def __init__(self, timeout: int = 10):
         """
         Initialize NSE Data Fetcher
         
@@ -24,6 +24,7 @@ class NSEDataFetcher:
         self.timeout = timeout
         self.logger = logging.getLogger("MarketMindAI.NSEDataFetcher")
         self.session = requests.Session()
+        self._cookies_fetched = False   # cache flag — only fetch once per session
         
         # NSE requires proper headers to avoid blocking
         self.headers = {
@@ -36,16 +37,19 @@ class NSEDataFetcher:
         }
         
     def _get_cookies(self):
-        """Get cookies from NSE homepage"""
+        """Get cookies from NSE homepage — fetched only once per session."""
+        if self._cookies_fetched:
+            return self.session.cookies
         try:
             response = self.session.get(
                 self.base_url,
                 headers=self.headers,
                 timeout=self.timeout
             )
+            self._cookies_fetched = True
             return response.cookies
         except Exception as e:
-            self.logger.error(f"Error getting cookies: {e}")
+            self.logger.warning(f"NSE cookie fetch failed: {e}")
             return None
     
     def _make_request(self, url: str, params: Optional[Dict] = None) -> Optional[Dict]:
@@ -60,9 +64,8 @@ class NSEDataFetcher:
             JSON response or None
         """
         try:
-            # Get fresh cookies
+            # Ensure cookies are loaded (cached after first call)
             self._get_cookies()
-            time.sleep(0.5)  # Rate limiting
             
             response = self.session.get(
                 url,
@@ -119,7 +122,8 @@ class NSEDataFetcher:
                     'volume': price_info.get('totalTradedVolume', 0),
                     'change': price_info.get('change', 0),
                     'change_percent': price_info.get('pChange', 0),
-                    'timestamp': datetime.now()
+                    'timestamp': datetime.now(),
+                    'source': 'NSE'
                 }
             except Exception as e:
                 self.logger.error(f"Error parsing stock quote: {e}")

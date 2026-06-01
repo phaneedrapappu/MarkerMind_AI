@@ -105,8 +105,6 @@ class MarketDataAgent(BaseAgent):
                 else:
                     self.logger.warning(f"No data fetched for {stock_symbol}")
                 
-                time.sleep(1)   # Rate limit
-                
             except Exception as e:
                 self.logger.error(f"Error fetching data for {stock_symbol}: {e}")
         
@@ -124,22 +122,33 @@ class MarketDataAgent(BaseAgent):
         # Attempt NSE
         quote_data = self.nse_fetcher.get_stock_quote(symbol)
 
-        # yfinance fallback (direct Yahoo Finance v8 HTTP API)
+        # yfinance fallback
         if not quote_data:
-            self.logger.warning(f"NSE fetch failed for {symbol}, trying Yahoo Finance …")
+            self.logger.info(f"{symbol}: NSE unavailable, trying Yahoo Finance …")
             quote_data = self._fetch_via_yfinance(symbol)
+
+        # Stooq fallback
+        if not quote_data:
+            self.logger.info(f"{symbol}: Yahoo Finance failed, trying Stooq …")
+            quote_data = self._fetch_via_stooq(symbol)
 
         # BSE India fallback
         if not quote_data:
-            self.logger.warning(f"Yahoo Finance failed for {symbol}, trying BSE India …")
+            self.logger.info(f"{symbol}: Stooq failed, trying BSE India …")
             quote_data = self._fetch_via_bse(symbol)
 
-        # Alpha Vantage fallback (free key: set ALPHA_VANTAGE_KEY in .env)
+        # Alpha Vantage fallback
         if not quote_data:
-            self.logger.warning(f"BSE failed for {symbol}, trying Alpha Vantage …")
+            self.logger.info(f"{symbol}: BSE failed, trying Alpha Vantage …")
             quote_data = self._fetch_via_alpha_vantage(symbol)
-        
+
+        # Local DB cache — last resort when all live sources are unavailable
         if not quote_data:
+            self.logger.info(f"{symbol}: all live sources failed, trying local cache …")
+            quote_data = self._fetch_from_cache(symbol)
+
+        if not quote_data:
+            self.logger.warning(f"{symbol}: all data sources failed (including cache)")
             return None
         
         # Create StockData object
@@ -158,29 +167,29 @@ class MarketDataAgent(BaseAgent):
             source=quote_data.get('source', 'NSE')
         )
         
-        # Fetch bulk deals
+        # Fetch bulk deals — best-effort only, skip silently if NSE blocks
         bulk_deals = []
         try:
             bulk_deals_data = self.nse_fetcher.get_bulk_deals()
             bulk_deals = self._parse_bulk_deals(bulk_deals_data, symbol)
-        except Exception as e:
-            self.logger.warning(f"Could not fetch bulk deals: {e}")
+        except Exception:
+            pass
         
         # Fetch block deals
         block_deals = []
         try:
             block_deals_data = self.nse_fetcher.get_block_deals()
             block_deals = self._parse_block_deals(block_deals_data, symbol)
-        except Exception as e:
-            self.logger.warning(f"Could not fetch block deals: {e}")
+        except Exception:
+            pass
         
         # Fetch FII/DII data
         institutional_activity = []
         try:
             fii_dii_data = self.nse_fetcher.get_fii_dii_data()
             institutional_activity = self._parse_institutional_activity(fii_dii_data)
-        except Exception as e:
-            self.logger.warning(f"Could not fetch FII/DII data: {e}")
+        except Exception:
+            pass
         
         snapshot = MarketDataSnapshot(
             stock_data=stock_data,
@@ -226,62 +235,54 @@ class MarketDataAgent(BaseAgent):
         sess  = MarketDataAgent._yf_session or requests.Session()
 
         for suffix in (".NS", ".BO"):
-            for attempt in range(3):
-                try:
-                    if attempt:
-                        time.sleep(2 ** attempt)
-                    params: Dict[str, Any] = {"interval": "1d", "range": "5d"}
-                    if crumb:
-                        params["crumb"] = crumb
-                    url = (
-                        f"https://query2.finance.yahoo.com/v8/finance/chart/"
-                        f"{symbol}{suffix}"
-                    )
-                    resp = sess.get(url, params=params, timeout=10)
-                    if resp.status_code == 401:
-                        # Crumb expired — refresh and retry
-                        crumb = self._get_yf_crumb()
-                        sess  = MarketDataAgent._yf_session or sess
-                        continue
-                    if resp.status_code == 429:
-                        self.logger.warning(f"YF rate-limited ({suffix}), retrying…")
-                        time.sleep(3)
-                        continue
-                    if resp.status_code != 200:
-                        break
-                    data   = resp.json()
-                    result = (data.get("chart", {}).get("result") or [None])[0]
-                    if not result:
-                        break
-                    meta   = result.get("meta", {})
-                    quotes = result.get("indicators", {}).get("quote", [{}])[0]
-                    closes = [v for v in (quotes.get("close")  or []) if v is not None]
-                    opens  = [v for v in (quotes.get("open")   or []) if v is not None]
-                    highs  = [v for v in (quotes.get("high")   or []) if v is not None]
-                    lows   = [v for v in (quotes.get("low")    or []) if v is not None]
-                    vols   = [v for v in (quotes.get("volume") or []) if v is not None]
-                    if not closes:
-                        break
-                    close      = float(closes[-1])
-                    prev_close = float(closes[-2]) if len(closes) >= 2 else float(meta.get("previousClose") or close)
-                    change     = close - prev_close
-                    change_pct = (change / prev_close * 100) if prev_close else 0
-                    return {
-                        "symbol": symbol.upper(),
-                        "company_name": meta.get("shortName") or meta.get("symbol") or symbol,
-                        "timestamp": datetime.now(),
-                        "price": close,
-                        "open": float(opens[-1]) if opens else close,
-                        "high": float(highs[-1]) if highs else close,
-                        "low": float(lows[-1]) if lows else close,
-                        "close": close,
-                        "volume": int(vols[-1]) if vols else 0,
-                        "change": change,
-                        "change_percent": change_pct,
-                        "source": f"Yahoo Finance ({suffix.strip('.')})",
-                    }
-                except Exception as exc:
-                    self.logger.warning(f"Yahoo Finance ({suffix}) attempt {attempt+1} for {symbol}: {exc}")
+            try:
+                params: Dict[str, Any] = {"interval": "1d", "range": "5d"}
+                if crumb:
+                    params["crumb"] = crumb
+                url = (
+                    f"https://query2.finance.yahoo.com/v8/finance/chart/"
+                    f"{symbol}{suffix}"
+                )
+                resp = sess.get(url, params=params, timeout=8)
+                if resp.status_code == 401:
+                    crumb = self._get_yf_crumb()
+                    sess  = MarketDataAgent._yf_session or sess
+                    continue
+                if resp.status_code != 200:
+                    continue
+                data   = resp.json()
+                result = (data.get("chart", {}).get("result") or [None])[0]
+                if not result:
+                    continue
+                meta   = result.get("meta", {})
+                quotes = result.get("indicators", {}).get("quote", [{}])[0]
+                closes = [v for v in (quotes.get("close")  or []) if v is not None]
+                opens  = [v for v in (quotes.get("open")   or []) if v is not None]
+                highs  = [v for v in (quotes.get("high")   or []) if v is not None]
+                lows   = [v for v in (quotes.get("low")    or []) if v is not None]
+                vols   = [v for v in (quotes.get("volume") or []) if v is not None]
+                if not closes:
+                    continue
+                close      = float(closes[-1])
+                prev_close = float(closes[-2]) if len(closes) >= 2 else float(meta.get("previousClose") or close)
+                change     = close - prev_close
+                change_pct = (change / prev_close * 100) if prev_close else 0
+                return {
+                    "symbol": symbol.upper(),
+                    "company_name": meta.get("shortName") or meta.get("symbol") or symbol,
+                    "timestamp": datetime.now(),
+                    "price": close,
+                    "open": float(opens[-1]) if opens else close,
+                    "high": float(highs[-1]) if highs else close,
+                    "low": float(lows[-1]) if lows else close,
+                    "close": close,
+                    "volume": int(vols[-1]) if vols else 0,
+                    "change": change,
+                    "change_percent": change_pct,
+                    "source": f"Yahoo Finance ({suffix.strip('.')})",
+                }
+            except Exception as exc:
+                self.logger.debug(f"Yahoo Finance ({suffix}) for {symbol}: {exc}")
         return None
 
     def _fetch_via_stooq(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -424,6 +425,45 @@ class MarketDataAgent(BaseAgent):
             }
         except Exception as exc:
             self.logger.error(f"Alpha Vantage fetch failed for {symbol}: {exc}")
+            return None
+
+    def _fetch_from_cache(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent stock data from the local SQLite DB."""
+        try:
+            import sqlite3, os
+            db_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "data", "marketmind.db"
+            )
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM stock_data WHERE symbol = ? ORDER BY timestamp DESC LIMIT 1",
+                (symbol.upper(),)
+            ).fetchone()
+            conn.close()
+            if not row:
+                return None
+            cached_ts = row["timestamp"]
+            self.logger.warning(
+                f"{symbol}: using cached data from {cached_ts} (market may be closed)"
+            )
+            return {
+                "symbol": row["symbol"],
+                "company_name": row["company_name"],
+                "timestamp": datetime.now(),
+                "price": row["price"],
+                "open": row["open_price"],
+                "high": row["high"],
+                "low": row["low"],
+                "close": row["close_price"],
+                "volume": row["volume"],
+                "change": row["change"],
+                "change_percent": row["change_percent"],
+                "source": f"Cache ({cached_ts[:10]})",
+            }
+        except Exception as exc:
+            self.logger.debug(f"Cache fetch failed for {symbol}: {exc}")
             return None
 
     def _parse_bulk_deals(self, deals_data: List[Dict], symbol: str) -> List[BulkBlockDeal]:
