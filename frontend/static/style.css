@@ -356,9 +356,59 @@ body {
 .mm-tab-btn:hover { border-color: var(--accent); color: var(--accent); }
 .mm-tab-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-/* Subscribe page */
+/* Subscribe / Daily Digest page — two-column layout */
+.mm-sub-page {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 24px;
+  align-items: start;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+/* Left info panel */
+.mm-sub-left {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 80px;          /* stay visible while right panel scrolls */
+}
+.mm-sub-hero-block {
+  padding: 8px 0 4px;
+}
+.mm-sub-info-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+/* Right form panel */
+.mm-sub-right {}
+.mm-sub-form-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 28px;
+}
+/* Stock grid in full-page context: show more chips, less modal-like */
+.mm-sub-form-card .mm-stock-grid {
+  max-height: 360px;
+}
+/* Responsive — stack on small screens */
+@media (max-width: 768px) {
+  .mm-sub-page {
+    grid-template-columns: 1fr;
+    padding: 16px 0 32px;
+    gap: 16px;
+  }
+  .mm-sub-left { position: static; }
+  .mm-sub-form-card { padding: 20px 16px; }
+}
+
+/* Legacy classes kept for unsubscribed / error states */
 .mm-subscribe-hero {
-  max-width: 560px;
+  max-width: 520px;
   margin: 48px auto;
   text-align: center;
 }
@@ -366,13 +416,13 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 36px 32px;
-  max-width: 560px;
-  margin: 0 auto 32px;
+  padding: 32px 28px;
+  max-width: 520px;
+  margin: 0 auto 24px;
 }
-.mm-sub-steps { display:flex; gap:16px; justify-content:center; flex-wrap:wrap; margin:24px 0; }
-.mm-sub-step { text-align:center; flex:1; min-width:100px; }
-.mm-sub-step-icon { font-size:28px; margin-bottom:6px; }
+.mm-sub-steps { display:flex; gap:16px; justify-content:center; flex-wrap:wrap; margin:16px 0; }
+.mm-sub-step { text-align:center; flex:1; min-width:90px; }
+.mm-sub-step-icon { font-size:24px; margin-bottom:6px; }
 .mm-sub-step-label { font-size:12px; color:var(--text-muted); }
 .mm-live-badge { display:inline-flex; align-items:center; gap:6px; background:rgba(34,197,94,.15);
   color:var(--green); font-size:11px; font-weight:700; padding:3px 10px; border-radius:99px; }

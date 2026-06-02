@@ -160,7 +160,8 @@ python3 app.py
 
 - Click **Run Analysis** in the navbar (or the ▶ button on mobile) — **login required**; non-logged-in users see a "Login to Run" button that redirects to `/login`
 - **Pick stocks** from 80+ NSE symbols grouped by sector, use the search box, or choose a preset
-- **Add recipients** — type emails one by one (press `Enter` or `,` after each); add as many as you need
+- **Add recipients** (Step 2 — one-time) — type emails one by one (press `Enter` or `,` after each); add as many as you need
+- **Optional: Daily Digest toggle** — if an email is entered, a `📬 Also subscribe for Daily Digest` toggle appears. Check it to also set up automated 2× daily emails for those stocks in one step — no need to visit `/daily-digest` separately
 - Hit **Run Analysis** — the pipeline runs in the background, the page refreshes when done
 
 ### Option C — CLI
@@ -217,7 +218,7 @@ curl http://localhost:5050/api/pipeline/status
 | `/screener` | No | **Stock Screener** — filter by sector, signal, RSI range, MACD trend |
 | `/backtest` | No | **Signal Backtesting** — simulate historical signals, P&L log, equity curve chart |
 | `/alerts` | No | Email alert history |
-| `/subscribe` | No | **Email Subscription** — pick stocks, subscribe for 2×/day digests |
+| `/subscribe` | No | **Daily Digest** — pick stocks, subscribe for automated 2×/day emails (nav shows "Daily Digest") |
 | `/unsubscribe?token=…` | No | One-click email unsubscribe |
 | `/login` | — | User login page |
 | `/register` | — | User registration page |
@@ -337,14 +338,16 @@ python3 setup_telegram_webhook.py delete  # revert to polling
 
 ---
 
-### Subscribe Page (`/subscribe`)
-A standalone subscription page that works like a lightweight SaaS product:
+### Daily Digest Page (`/subscribe`) — *navbar: "Daily Digest"*
+A standalone subscription page for setting up **automated recurring emails** (distinct from one-time Run Analysis):
 - Enter your email address and choose stocks to track
 - The app sends a full AI digest **2 times per day**:
   - **8:45 AM IST** — pre-market signal preview before NSE opens
   - **4:15 PM IST** — post-market summary after NSE closes
 - Unsubscribe with a single click (token-based link included in every email)
 - No login required — email is the identity
+
+> **Tip:** You can also subscribe from within the **Run Analysis** modal (Step 2 → check *Also subscribe for Daily Digest*) without navigating away.
 
 ---
 
@@ -365,9 +368,17 @@ Global news is fetched every time the pipeline runs (tagged internally as `__GLO
 
 ### How it works
 
-1. Visit `/subscribe` in the browser (or navigate via the *Subscribe* navbar link)
+**Via Run Analysis modal (recommended — one flow):**
+1. Click **Run Analysis** in the navbar
+2. Pick stocks (Step 1)
+3. Enter email (Step 2 — marked *One-time*)
+4. Check **📬 Also subscribe for Daily Digest** toggle that appears
+5. Click **Run Analysis** — analysis runs AND subscription is created simultaneously
+
+**Via Daily Digest page (standalone):**
+1. Visit `/subscribe` in the browser (or navigate via the *Daily Digest* navbar link)
 2. Choose the NSE stocks you want to track
-3. Enter your email and click **Subscribe / Update Watchlist**
+3. Enter your email and click **Subscribe / Update Daily Digest**
 4. Automated digests land in your inbox **2 times every trading day**:
    - **08:45 AM IST** — pre-market analysis before NSE opens (9:15 AM)
    - **04:15 PM IST** — post-market recap after NSE closes (3:30 PM)

@@ -258,6 +258,22 @@ function updateRunSummary() {
     }
   }
 
+  // Show/hide the Daily Digest toggle row — only relevant when email is entered
+  const digestRow = document.getElementById('dailyDigestRow');
+  if (digestRow) digestRow.style.display = ec > 0 ? '' : 'none';
+  // If emails were removed, uncheck the toggle
+  if (ec === 0) {
+    const tog = document.getElementById('dailyDigestToggle');
+    if (tog) tog.checked = false;
+  }
+
+  // Append digest note to summary when toggle is on
+  if (ec > 0 && document.getElementById('dailyDigestToggle')?.checked && summaryEl) {
+    const existing = summaryEl.innerHTML;
+    if (!existing.includes('Daily Digest'))
+      summaryEl.innerHTML += ' &nbsp;<span style="color:#38bdf8;font-size:11px"><i class="bi bi-calendar-check me-1"></i>Daily Digest</span>';
+  }
+
   // Run enabled only when: stocks chosen AND at least one output ready AND not still loading
   if (runBtn) runBtn.disabled = tgLoading ? !ec : (!sc || !hasOutput);
 }
@@ -292,7 +308,21 @@ async function launchPipeline() {
       showToast(data.error, 'error', 8000);
       return;
     }
-    if (data.status === 'started') { showToast('Pipeline started', 'success'); pollPipelineStatus(); }
+    if (data.status === 'started') {
+      showToast('Pipeline started', 'success');
+      pollPipelineStatus();
+      // If Daily Digest toggle is on, subscribe in parallel
+      const digestToggle = document.getElementById('dailyDigestToggle');
+      if (digestToggle?.checked && emails.length > 0) {
+        fetch('/api/subscribe', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ email: emails[0], stocks }),
+        }).then(r => r.json()).then(d => {
+          if (d.status === 'ok') showToast(`📬 Daily Digest set up for ${emails[0]}`, 'success', 5000);
+        }).catch(() => {});
+      }
+    }
     else if (data.status === 'already_running') { showToast('Already running', 'warn'); pollPipelineStatus(); }
     else { setBadge('error','Error'); showToast(data.error || 'Failed to start', 'error'); }
   } catch(err) { setBadge('error','Error'); showToast('Could not reach server — is it running?', 'error'); }
