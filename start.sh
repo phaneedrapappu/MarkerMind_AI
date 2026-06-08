@@ -91,6 +91,12 @@ pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
 ok "Dependencies installed"
 
+# Install Playwright Chromium if not already present (used for NSE Akamai bypass)
+if ! venv/bin/playwright install --dry-run chromium &>/dev/null 2>&1; then
+    info "Installing Playwright Chromium browser…"
+    venv/bin/playwright install chromium --quiet 2>/dev/null || true
+fi
+
 # ── 4. Create required directories ───────────────────────────────────────────
 mkdir -p data logs data/reports
 ok "Directories ready"
@@ -123,8 +129,12 @@ p.write_text(text)
     echo -e "${YELLOW}  │     SMTP_USER + SMTP_PASSWORD (Gmail App Password)                   │${NC}"
     echo -e "${YELLOW}  │     https://myaccount.google.com/apppasswords                       │${NC}"
     echo -e "${YELLOW}  │                                                                      │${NC}"
-    echo -e "${YELLOW}  │  3. Telegram (optional): TELEGRAM_BOT_TOKEN                          │${NC}"
-    echo -e "${YELLOW}  │     Create bot at https://t.me/botfather                             │${NC}"
+    echo -e "${YELLOW}  │  3. Market data fallback (optional, improves reliability):    │${NC}"
+    echo -e "${YELLOW}  │     FINNHUB_KEY (60 req/min free): https://finnhub.io          │${NC}"
+    echo -e "${YELLOW}  │     ALPHA_VANTAGE_KEY (25 req/day): https://alphavantage.co    │${NC}"
+    echo -e "${YELLOW}  │                                                               │${NC}"
+    echo -e "${YELLOW}  │  4. Telegram (optional): TELEGRAM_BOT_TOKEN                   │${NC}"
+    echo -e "${YELLOW}  │     Create bot at https://t.me/botfather                      │${NC}"
     echo -e "${YELLOW}  └──────────────────────────────────────────────────────────────────────┘${NC}"
     echo ""
     read -rp "  Open .env in your editor now? [y/N] " REPLY

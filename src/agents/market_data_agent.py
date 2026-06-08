@@ -24,6 +24,12 @@ try:
 except ImportError:
     YFINANCE_AVAILABLE = False
 
+try:
+    from curl_cffi import requests as cffi_requests
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
+
 
 class MarketDataAgent(BaseAgent):
     """
@@ -39,6 +45,7 @@ class MarketDataAgent(BaseAgent):
         self.nse_fetcher: Optional[NSEDataFetcher] = None
         self.collected_data: List[MarketDataSnapshot] = []
         self.db = db_manager
+        self._finnhub_india_blocked = False   # set True on first 403 (free-tier NSE block)
         
     def initialize(self) -> bool:
         """
@@ -127,9 +134,14 @@ class MarketDataAgent(BaseAgent):
             self.logger.info(f"{symbol}: NSE unavailable, trying Yahoo Finance …")
             quote_data = self._fetch_via_yfinance(symbol)
 
+        # Finnhub fallback (60 req/min free tier)
+        if not quote_data:
+            self.logger.info(f"{symbol}: Yahoo Finance failed, trying Finnhub …")
+            quote_data = self._fetch_via_finnhub(symbol)
+
         # Stooq fallback
         if not quote_data:
-            self.logger.info(f"{symbol}: Yahoo Finance failed, trying Stooq …")
+            self.logger.info(f"{symbol}: Finnhub failed, trying Stooq …")
             quote_data = self._fetch_via_stooq(symbol)
 
         # BSE India fallback
@@ -199,56 +211,43 @@ class MarketDataAgent(BaseAgent):
         return snapshot
 
     # ── Yahoo Finance helpers ─────────────────────────────────────────────────
-    _yf_crumb: Optional[str] = None
-    _yf_session: Optional[requests.Session] = None
-
-    def _get_yf_crumb(self) -> Optional[str]:
-        """Obtain a Yahoo Finance crumb+cookie (required since 2024)."""
-        try:
-            sess = requests.Session()
-            sess.headers.update({
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "Chrome/124.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml",
-            })
-            # Step 1: hit the main page to get cookies
-            sess.get("https://finance.yahoo.com", timeout=10)
-            # Step 2: get the crumb
-            r = sess.get(
-                "https://query2.finance.yahoo.com/v1/test/getcrumb",
-                timeout=10,
-            )
-            crumb = r.text.strip()
-            if crumb and len(crumb) < 20:
-                MarketDataAgent._yf_crumb = crumb
-                MarketDataAgent._yf_session = sess
-                return crumb
-        except Exception as exc:
-            self.logger.warning(f"Could not get YF crumb: {exc}")
-        return None
+    # NOTE: crumb/cookie flow removed — visiting finance.yahoo.com first
+    # triggers 429 rate-limiting on the chart endpoint. Plain direct requests
+    # to v8 API work reliably without any authentication.
+    _YF_UA = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
 
     def _fetch_via_yfinance(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch quote directly from Yahoo Finance v8 API with crumb auth."""
-        crumb = MarketDataAgent._yf_crumb or self._get_yf_crumb()
-        sess  = MarketDataAgent._yf_session or requests.Session()
-
+        """Fetch quote from Yahoo Finance v8 API.
+        Uses curl_cffi with Chrome TLS fingerprint to bypass 429 rate-limits;
+        falls back to plain requests if curl_cffi is unavailable.
+        """
         for suffix in (".NS", ".BO"):
             try:
-                params: Dict[str, Any] = {"interval": "1d", "range": "5d"}
-                if crumb:
-                    params["crumb"] = crumb
                 url = (
                     f"https://query2.finance.yahoo.com/v8/finance/chart/"
                     f"{symbol}{suffix}"
                 )
-                resp = sess.get(url, params=params, timeout=8)
-                if resp.status_code == 401:
-                    crumb = self._get_yf_crumb()
-                    sess  = MarketDataAgent._yf_session or sess
+                if CURL_CFFI_AVAILABLE:
+                    resp = cffi_requests.get(
+                        url,
+                        impersonate="chrome124",
+                        params={"interval": "1d", "range": "5d"},
+                        timeout=8,
+                    )
+                else:
+                    resp = requests.get(
+                        url,
+                        headers={"User-Agent": self._YF_UA},
+                        params={"interval": "1d", "range": "5d"},
+                        timeout=8,
+                    )
+                if resp.status_code == 429:
+                    self.logger.debug(f"Yahoo Finance rate-limited for {symbol}{suffix}")
                     continue
-                if resp.status_code != 200:
+                if resp.status_code != 200 or not resp.text.strip():
                     continue
                 data   = resp.json()
                 result = (data.get("chart", {}).get("result") or [None])[0]
@@ -268,31 +267,34 @@ class MarketDataAgent(BaseAgent):
                 change     = close - prev_close
                 change_pct = (change / prev_close * 100) if prev_close else 0
                 return {
-                    "symbol": symbol.upper(),
-                    "company_name": meta.get("shortName") or meta.get("symbol") or symbol,
-                    "timestamp": datetime.now(),
-                    "price": close,
-                    "open": float(opens[-1]) if opens else close,
-                    "high": float(highs[-1]) if highs else close,
-                    "low": float(lows[-1]) if lows else close,
-                    "close": close,
-                    "volume": int(vols[-1]) if vols else 0,
-                    "change": change,
-                    "change_percent": change_pct,
-                    "source": f"Yahoo Finance ({suffix.strip('.')})",
+                    "symbol":         symbol.upper(),
+                    "company_name":   meta.get("shortName") or meta.get("symbol") or symbol,
+                    "timestamp":      datetime.now(),
+                    "price":          close,
+                    "open":           float(opens[-1]) if opens else close,
+                    "high":           float(highs[-1]) if highs else close,
+                    "low":            float(lows[-1])  if lows  else close,
+                    "close":          close,
+                    "volume":         int(vols[-1]) if vols else 0,
+                    "change":         round(change, 2),
+                    "change_percent": round(change_pct, 2),
+                    "source":         f"Yahoo Finance ({suffix.strip('.')})",
                 }
             except Exception as exc:
                 self.logger.debug(f"Yahoo Finance ({suffix}) for {symbol}: {exc}")
         return None
 
     def _fetch_via_stooq(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch quote from Stooq (free, no API key, reliable for NSE stocks)."""
+        """Fetch quote from Stooq CSV API. Returns None if Stooq serves HTML (bot-block)."""
         try:
-            # Use historical daily endpoint — returns last N rows, works on weekends
             ticker = f"{symbol.lower()}.ns"
             url = f"https://stooq.com/q/d/l/?s={ticker}&i=d"
             resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
+            # Stooq returns HTML when bot-blocked — detect and skip
+            if resp.text.lstrip().startswith("<"):
+                self.logger.debug(f"Stooq returned HTML for {symbol} (bot-blocked)")
+                return None
             reader = csv.DictReader(io.StringIO(resp.text))
             rows = [r for r in reader if r.get("Close") not in (None, "", "null", "N/D")]
             if not rows:
@@ -377,6 +379,58 @@ class MarketDataAgent(BaseAgent):
             }
         except Exception as exc:
             self.logger.error(f"BSE fetch failed for {symbol}: {exc}")
+            return None
+
+    def _fetch_via_finnhub(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch quote from Finnhub.
+        Free tier (60 req/min) only covers US/major exchanges — NSE India
+        requires a paid Finnhub plan. On first 403 a one-time warning is
+        logged and all further Finnhub calls are skipped this session.
+        """
+        import os
+        if self._finnhub_india_blocked:
+            return None
+        api_key = os.getenv("FINNHUB_KEY", "").strip()
+        if not api_key:
+            self.logger.debug("Finnhub: FINNHUB_KEY not set — skipping")
+            return None
+        try:
+            url = "https://finnhub.io/api/v1/quote"
+            # Use SYMBOL.NS format — returns 403 on free tier (better than silent zeros)
+            resp = requests.get(url, params={"symbol": f"{symbol.upper()}.NS", "token": api_key}, timeout=8)
+            if resp.status_code == 403:
+                self._finnhub_india_blocked = True
+                self.logger.warning(
+                    "Finnhub: free tier does not include NSE India data (403). "
+                    "Skipping Finnhub for this session. "
+                    "Upgrade at https://finnhub.io or remove FINNHUB_KEY from .env to suppress this."
+                )
+                return None
+            resp.raise_for_status()
+            d = resp.json()
+            price = float(d.get("c") or 0)
+            if price == 0:
+                return None
+            prev  = float(d.get("pc") or price)
+            chg   = round(price - prev, 2)
+            chg_p = round((chg / prev * 100) if prev else 0, 2)
+            return {
+                "symbol":         symbol.upper(),
+                "company_name":   symbol.upper(),
+                "timestamp":      datetime.now(),
+                "price":          price,
+                "open":           float(d.get("o") or price),
+                "high":           float(d.get("h") or price),
+                "low":            float(d.get("l") or price),
+                "close":          price,
+                "volume":         0,
+                "change":         chg,
+                "change_percent": chg_p,
+                "source":         "Finnhub",
+            }
+        except Exception as exc:
+            self.logger.warning(f"Finnhub fetch failed for {symbol}: {exc}")
             return None
 
     def _fetch_via_alpha_vantage(self, symbol: str) -> Optional[Dict[str, Any]]:

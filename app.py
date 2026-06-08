@@ -1028,51 +1028,38 @@ def _yf_sym(sym: str) -> str:
 
 # ── Shared Yahoo Finance HTTP session (avoids yfinance library) ───────────────
 class _YFSession:
-    """Persistent session with crumb for Yahoo Finance v8 API."""
-    sess  = None
-    crumb = None
-
-    @classmethod
-    def _init(cls):
-        import requests as _r
-        s = _r.Session()
-        s.headers.update({
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-        })
-        try:
-            s.get("https://finance.yahoo.com", timeout=10)
-            r = s.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=10)
-            crumb = r.text.strip()
-            if crumb and len(crumb) < 30 and "Too Many" not in crumb:
-                cls.crumb = crumb
-        except Exception:
-            pass
-        cls.sess = s
+    """Yahoo Finance v8 API helper using curl_cffi for TLS fingerprint spoofing.
+    Visiting finance.yahoo.com for crumb triggers IP-level 429 rate-limiting on
+    the chart endpoint — plain requests are blocked. curl_cffi with Chrome
+    impersonation bypasses this reliably without any auth/crumb flow.
+    """
+    _UA = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
 
     @classmethod
     def get(cls, url: str, **kwargs):
-        import requests as _r
-        if cls.sess is None:
-            cls._init()
-        params = kwargs.pop("params", {})
-        if cls.crumb:
-            params["crumb"] = cls.crumb
-        resp = cls.sess.get(url, params=params, **kwargs)
-        if resp.status_code in (401, 403):
-            cls._init()
-            if cls.crumb:
-                params["crumb"] = cls.crumb
-            resp = cls.sess.get(url, params=params, **kwargs)
-        return resp
+        try:
+            from curl_cffi import requests as _cffi
+            kwargs.setdefault("impersonate", "chrome124")
+            return _cffi.get(url, **kwargs)
+        except ImportError:
+            import requests as _r
+            kwargs.pop("impersonate", None)
+            headers = kwargs.pop("headers", {})
+            headers.setdefault("User-Agent", cls._UA)
+            return _r.get(url, headers=headers, **kwargs)
 
 
 def _yf_chart(symbol: str, period: str = "5d", interval: str = "1d") -> dict:
     """
-    Fetch Yahoo Finance v8 chart data without the yfinance library.
-    Returns the raw 'result' dict or {} on failure. Tries .NS then .BO.
+    Fetch Yahoo Finance v8 chart data via curl_cffi (Chrome TLS fingerprint).
+    Returns the raw 'result' dict or {} on failure.
+    Index symbols (^NSEI, ^BSESN) are used as-is; equities try .NS then .BO.
     """
-    for suffix in (".NS", ".BO"):
+    suffixes = [""] if symbol.startswith("^") else [".NS", ".BO"]
+    for suffix in suffixes:
         try:
             resp = _YFSession.get(
                 f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}{suffix}",
@@ -1224,7 +1211,7 @@ def api_stocks_movers():
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://www.nseindia.com/",
         }
-        nse_sess = _YFSession.sess or __import__("requests").Session()
+        nse_sess = __import__("requests").Session()
         nse_sess.headers.update(nse_headers)
         # Warm up the session with NSE homepage to get cookies
         nse_sess.get("https://www.nseindia.com", timeout=10)

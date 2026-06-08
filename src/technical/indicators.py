@@ -81,26 +81,39 @@ def get_indicators(
     """
     prices: Optional[pd.Series] = None
 
-    # 1 — try yfinance
+    # 1 — try Yahoo Finance v8 API via curl_cffi (bypasses 429 rate-limiting)
     if yfinance_first:
         try:
-            import yfinance as yf
-
             yf_sym = symbol.upper()
             if not yf_sym.endswith(".NS"):
                 yf_sym += ".NS"
-            df = yf.download(
-                yf_sym, period="3mo", interval="1d",
-                progress=False, auto_adjust=True,
-            )
-            if not df.empty:
-                close = df["Close"]
-                if hasattr(close, "squeeze"):
-                    close = close.squeeze()
-                prices = close.dropna()
-                logger.debug(f"[{symbol}] yfinance: {len(prices)} rows")
+            try:
+                from curl_cffi import requests as _cffi
+                resp = _cffi.get(
+                    f"https://query2.finance.yahoo.com/v8/finance/chart/{yf_sym}",
+                    impersonate="chrome124",
+                    params={"interval": "1d", "range": "3mo"},
+                    timeout=10,
+                )
+            except ImportError:
+                import requests as _r
+                resp = _r.get(
+                    f"https://query2.finance.yahoo.com/v8/finance/chart/{yf_sym}",
+                    headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"},
+                    params={"interval": "1d", "range": "3mo"},
+                    timeout=10,
+                )
+            if resp.status_code == 200:
+                d = resp.json()
+                result = (d.get("chart", {}).get("result") or [None])[0]
+                if result:
+                    closes = (result.get("indicators", {}).get("quote", [{}])[0].get("close") or [])
+                    closes = [v for v in closes if v is not None]
+                    if closes:
+                        prices = pd.Series(closes, dtype=float)
+                        logger.debug(f"[{symbol}] Yahoo Finance v8: {len(prices)} rows")
         except Exception as exc:
-            logger.warning(f"[{symbol}] yfinance failed: {exc}")
+            logger.warning(f"[{symbol}] Yahoo Finance fetch failed: {exc}")
 
     # 2 — fallback to DB rows (oldest → newest price list)
     if prices is None or len(prices) < 20:

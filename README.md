@@ -13,7 +13,7 @@ MarketMind AI is an autonomous multi-agent system that monitors Indian stock mar
 ## 🏗️ Agent Pipeline
 
 ```
-MarketDataAgent       →  NSE API / yfinance fallback
+MarketDataAgent       →  NSE API (Playwright/curl-cffi bypass) → Yahoo Finance → Finnhub → Stooq → BSE → Alpha Vantage → DB cache
        ↓
   NewsAgent            →  RSS feeds (Google News, ET Markets, Moneycontrol)
        ↓
@@ -116,6 +116,18 @@ SMTP_PASSWORD=your_gmail_app_password
 # ── Flask ────────────────────────────────────────────────────────────────────
 FLASK_PORT=5050
 FLASK_SECRET_KEY=change_me_to_a_long_random_string
+
+# ── Market Data fallback chain (optional — improves reliability) ──────────────
+# Fallback order: NSE → Yahoo Finance → Finnhub → Stooq → BSE → Alpha Vantage → Cache
+
+# Finnhub — 60 req/min (paid plan needed for NSE India)
+# NOTE: Free tier returns 403 for Indian stocks. Leave blank to skip.
+# Sign up free at https://finnhub.io → Dashboard → copy API Key
+FINNHUB_KEY=your_finnhub_api_key
+
+# Alpha Vantage — 25 req/day free tier
+# Get key at https://www.alphavantage.co/support/#api-key
+# ALPHA_VANTAGE_KEY=your_alpha_vantage_key
 
 # ── Telegram (optional) ──────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
@@ -705,7 +717,7 @@ MarkerMind_AI/
 │   ├── email_utils.py           # Standalone SMTP helpers (welcome/update/lookup emails)
 │   ├── agents/
 │   │   ├── base_agent.py        # ABC with initialize / execute / cleanup
-│   │   ├── market_data_agent.py # NSE primary + yfinance fallback
+│   │   ├── market_data_agent.py # NSE (Playwright bypass) → Yahoo Finance → Finnhub → Stooq → BSE → Alpha Vantage → cache
 │   │   ├── news_agent.py        # RSS feeds (no API key needed)
 │   │   ├── ai_analysis_agent.py # Claude / Gemini / OpenAI — batched per cycle
 │   │   ├── signal_generator_agent.py  # Rule-based BUY/HOLD/SELL

@@ -41,6 +41,13 @@ apscheduler==3.10.4
 python-dotenv==1.0.1
 holidays>=0.50
 
+# Market data – NSE bypass (Akamai cookie harvesting)
+# playwright>=1.40.0 is installed separately; run: playwright install chromium
+playwright>=1.40.0
+curl-cffi>=0.6.0             # Chrome TLS fingerprint spoofing for NSE requests
+# Finnhub uses the built-in `requests` library – no extra package needed.
+# Alpha Vantage also uses `requests` – no extra package needed.
+
 # Testing
 pytest==7.4.4
 pytest-cov==4.1.0
