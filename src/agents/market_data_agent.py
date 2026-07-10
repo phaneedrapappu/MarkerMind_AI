@@ -331,7 +331,7 @@ class MarketDataAgent(BaseAgent):
 
     def _fetch_via_bse(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch quote from BSE India public API (no auth required)."""
-        # BSE uses numeric scrip codes; map via search API
+        # BSE uses numeric scrip codes; map via search API 
         try:
             search_url = (
                 f"https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w"
