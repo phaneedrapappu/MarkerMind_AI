@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Subscribe – MarketMind AI{% endblock %}
+{% block title %}Daily Digest – MarketMind AI{% endblock %}
 
 {% block content %}
 
@@ -27,134 +27,137 @@
 
 {% else %}
 <!-- Subscription form -->
-<div class="mm-subscribe-hero">
-  <!-- Hero -->
-  <div class="mb-4">
-    <div style="font-size:56px;margin-bottom:10px">📬</div>
-    <h2 class="fw-bold mb-2">Daily Market Intelligence</h2>
-    <p class="text-muted">Get AI-generated trading signals + news digest for your chosen stocks,<br>
-       sent to your inbox <strong>2× per day</strong> — before market opens &amp; after it closes.<br>
-       <span class="text-muted" style="font-size:13px">
-         <i class="bi bi-arrow-repeat me-1"></i>Already subscribed? Re-submit with a new stock list to update your watchlist.
-       </span></p>
-    <div class="d-flex justify-content-center gap-3 flex-wrap mt-3">
-      <span class="mm-live-badge"><span class="mm-live-dot"></span>Pre-market 8:45 AM IST</span>
-      <span class="mm-live-badge"><span class="mm-live-dot"></span>Post-market 4:15 PM IST</span>
-      <span class="mm-live-badge"><span class="mm-live-dot"></span>Free forever</span>
-    </div>
-  </div>
+<div class="mm-sub-page">
 
-  <!-- How it works -->
-  <div class="mm-subscribe-card mb-4">
-    <h6 class="text-muted text-uppercase fw-bold small mb-3" style="letter-spacing:.08em">How it works</h6>
-    <div class="mm-sub-steps">
-      <div class="mm-sub-step">
-        <div class="mm-sub-step-icon">📋</div>
-        <div class="fw-semibold" style="font-size:13px">Pick Stocks</div>
-        <div class="mm-sub-step-label">Choose any NSE stocks you want to track</div>
-      </div>
-      <div class="mm-sub-step">
-        <div class="mm-sub-step-icon">📧</div>
-        <div class="fw-semibold" style="font-size:13px">Enter Email</div>
-        <div class="mm-sub-step-label">Add your email address to receive alerts</div>
-      </div>
-      <div class="mm-sub-step">
-        <div class="mm-sub-step-icon">🤖</div>
-        <div class="fw-semibold" style="font-size:13px">AI Digest</div>
-        <div class="mm-sub-step-label">AI analyses each stock and generates BUY/HOLD/SELL signals</div>
-      </div>
-      <div class="mm-sub-step">
-        <div class="mm-sub-step-icon">📊</div>
-        <div class="fw-semibold" style="font-size:13px">2× Daily</div>
-        <div class="mm-sub-step-label">Rich HTML report lands in your inbox automatically</div>
+  <!-- LEFT PANEL: info / hero / manage -->
+  <div class="mm-sub-left">
+
+    <!-- Hero -->
+    <div class="mm-sub-hero-block">
+      <div style="font-size:48px;line-height:1;margin-bottom:10px">📬</div>
+      <h2 class="fw-bold mb-2" style="font-size:1.6rem">Daily Digest</h2>
+      <p class="text-muted" style="font-size:14px">AI-generated trading signals + news for your chosen stocks, delivered <strong>2× per day</strong>.</p>
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        <span class="mm-live-badge"><span class="mm-live-dot"></span>8:45 AM IST pre-market</span>
+        <span class="mm-live-badge"><span class="mm-live-dot"></span>4:15 PM IST post-market</span>
+        <span class="mm-live-badge"><span class="mm-live-dot"></span>Free forever</span>
       </div>
     </div>
-  </div>
 
-  <!-- Subscription form card -->
-  <div class="mm-subscribe-card">
-    <h5 class="fw-bold mb-1"><i class="bi bi-envelope-heart text-accent me-2"></i>Subscribe Now</h5>
-    <p class="text-muted small mb-4">No spam. Unsubscribe anytime with one click.</p>
-
-    <!-- Alert area -->
-    <div id="subAlert" style="display:none" class="mb-3"></div>
-
-    <!-- Step 1: Email -->
-    <div class="mb-4">
-      <label class="form-label fw-semibold" style="font-size:14px">
-        <i class="bi bi-envelope me-1"></i>Your Email Address
-      </label>
-      <input type="email" id="subEmail" class="form-control mm-input"
-             placeholder="you@example.com" autocomplete="email">
+    <!-- How it works -->
+    <div class="mm-sub-info-card">
+      <div class="fw-bold mb-3" style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted)">How it works</div>
+      <div class="d-flex flex-column gap-3">
+        <div class="d-flex gap-3 align-items-start">
+          <div style="font-size:22px;line-height:1;flex-shrink:0">📋</div>
+          <div><div class="fw-semibold" style="font-size:13px">Pick Stocks</div><div class="text-muted" style="font-size:12px">Choose any NSE stocks you want to track</div></div>
+        </div>
+        <div class="d-flex gap-3 align-items-start">
+          <div style="font-size:22px;line-height:1;flex-shrink:0">🤖</div>
+          <div><div class="fw-semibold" style="font-size:13px">AI Digest</div><div class="text-muted" style="font-size:12px">BUY/HOLD/SELL signals + news sentiment generated automatically</div></div>
+        </div>
+        <div class="d-flex gap-3 align-items-start">
+          <div style="font-size:22px;line-height:1;flex-shrink:0">📊</div>
+          <div><div class="fw-semibold" style="font-size:13px">2× Daily Email</div><div class="text-muted" style="font-size:12px">Rich HTML report lands in your inbox every trading day</div></div>
+        </div>
+      </div>
     </div>
 
-    <!-- Step 2: Stock Picker -->
-    <div class="mb-4">
-      <label class="form-label fw-semibold" style="font-size:14px">
-        <i class="bi bi-graph-up me-1"></i>Stocks to Track
-        <span class="ms-2 mm-selected-count" id="subSelCount">0 selected</span>
-        <button class="mm-btn-outline-sm ms-2" onclick="subClearAll()" id="subClearBtn"
-                style="font-size:11px;padding:2px 8px;display:none">
-          <i class="bi bi-x-circle me-1"></i>Clear All
+    <!-- One-time tip -->
+    <div class="mm-sub-info-card" style="background:rgba(56,189,248,0.06);border-color:rgba(56,189,248,0.18)">
+      <div class="d-flex gap-2 align-items-start">
+        <div style="font-size:18px;line-height:1;flex-shrink:0">💡</div>
+        <div style="font-size:13px">
+          <strong>Want one-time analysis?</strong><br>
+          <span class="text-muted">Use the <a href="/" style="color:var(--accent);text-decoration:none;font-weight:600">⚡ Run Analysis</a> button — results in ~2 min.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manage subscription -->
+    <div class="mm-sub-info-card">
+      <div class="fw-bold mb-2" style="font-size:13px"><i class="bi bi-gear text-accent me-2"></i>Manage Subscription</div>
+      <p class="text-muted mb-3" style="font-size:12px">Enter your email to receive your unsubscribe link.</p>
+      <div id="lookupAlert" style="display:none" class="mb-2"></div>
+      <div class="d-flex gap-2">
+        <input type="email" id="lookupEmail" class="form-control mm-input" placeholder="your@email.com" style="font-size:13px">
+        <button class="mm-btn-outline-sm" id="lookupBtn" onclick="doLookup()" style="white-space:nowrap;padding:6px 12px;font-size:12px">
+          <i class="bi bi-send me-1"></i>Send Link
         </button>
-        <span id="subLiveBadge" class="mm-live-badge ms-2" style="display:none">
-          <span class="mm-live-dot"></span>Live NSE list
-        </span>
-      </label>
+      </div>
+    </div>
 
-      <!-- Search -->
-      <div class="position-relative mb-2">
-        <i class="bi bi-search mm-search-icon"></i>
-        <input type="text" id="subSearch" class="form-control mm-search-input"
-               placeholder="Search any NSE stock…" oninput="subFilterStocks(this.value)">
+  </div>
+
+  <!-- RIGHT PANEL: subscription form -->
+  <div class="mm-sub-right">
+    <div class="mm-sub-form-card">
+      <h5 class="fw-bold mb-1"><i class="bi bi-calendar-check text-accent me-2"></i>Subscribe for Daily Digest</h5>
+      <p class="text-muted small mb-4">Automated reports at 8:45 AM &amp; 4:15 PM IST. No spam. Unsubscribe anytime.</p>
+
+      <!-- Alert area -->
+      <div id="subAlert" style="display:none" class="mb-3"></div>
+
+      <!-- Email -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold" style="font-size:14px">
+          <i class="bi bi-envelope me-1"></i>Your Email Address
+        </label>
+        <input type="email" id="subEmail" class="form-control mm-input"
+               placeholder="you@example.com" autocomplete="email">
       </div>
 
-      <!-- Sector tabs -->
-      <div class="mm-sector-tabs mb-2" id="subSectorTabs">
-        <button class="mm-sector-tab active" onclick="subFilterSector('all', this)">All</button>
-      </div>
+      <!-- Stock Picker -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold" style="font-size:14px">
+          <i class="bi bi-graph-up me-1"></i>Stocks to Track
+          <span class="ms-2 mm-selected-count" id="subSelCount">0 selected</span>
+          <button class="mm-btn-outline-sm ms-2" onclick="subClearAll()" id="subClearBtn"
+                  style="font-size:11px;padding:2px 8px;display:none">
+            <i class="bi bi-x-circle me-1"></i>Clear All
+          </button>
+          <span id="subLiveBadge" class="mm-live-badge ms-2" style="display:none">
+            <span class="mm-live-dot"></span>Live NSE list
+          </span>
+        </label>
 
-      <!-- Stock chips -->
-      <div class="mm-stock-grid" id="subStockGrid">
-        <div class="text-muted small text-center py-4">
-          <span class="spinner-border spinner-border-sm me-2"></span>Loading stocks…
+        <!-- Search -->
+        <div class="position-relative mb-2">
+          <i class="bi bi-search mm-search-icon"></i>
+          <input type="text" id="subSearch" class="form-control mm-search-input"
+                 placeholder="Search any NSE stock…" oninput="subFilterStocks(this.value)">
+        </div>
+
+        <!-- Sector tabs -->
+        <div class="mm-sector-tabs mb-2" id="subSectorTabs">
+          <button class="mm-sector-tab active" onclick="subFilterSector('all', this)">All</button>
+        </div>
+
+        <!-- Stock chips -->
+        <div class="mm-stock-grid" id="subStockGrid">
+          <div class="text-muted small text-center py-4">
+            <span class="spinner-border spinner-border-sm me-2"></span>Loading stocks…
+          </div>
+        </div>
+
+        <!-- Presets -->
+        <div class="mm-presets mt-2">
+          <span class="text-muted small me-2">Quick:</span>
+          <span id="subPresetBtns"><span class="spinner-border spinner-border-sm me-1"></span>Loading presets…</span>
         </div>
       </div>
 
-      <!-- Presets -->
-      <div class="mm-presets mt-2">
-        <span class="text-muted small me-2">Quick:</span>
-        <span id="subPresetBtns"><span class="spinner-border spinner-border-sm me-1"></span>Loading presets…</span>
-      </div>
-    </div>
-
-    <!-- Subscribe button -->
-    <button class="mm-btn-primary w-100" id="subBtn" onclick="doSubscribe()" disabled style="font-size:15px;padding:12px">
-      <i class="bi bi-envelope-check me-2"></i>Subscribe / Update Watchlist
-    </button>
-    <p class="text-muted text-center mt-3" style="font-size:12px">
-      <i class="bi bi-shield-check me-1"></i>
-      Your email is used only to deliver alerts. We never share it.
-    </p>
-  </div>
-
-  <!-- Manage Subscription card -->
-  <div class="mm-subscribe-card mt-3">
-    <h6 class="fw-bold mb-1" style="font-size:14px">
-      <i class="bi bi-gear text-accent me-2"></i>Already subscribed? Manage your subscription
-    </h6>
-    <p class="text-muted small mb-3">Enter your email and we'll send your unsubscribe link — even if you've lost it.</p>
-
-    <div id="lookupAlert" style="display:none" class="mb-3"></div>
-
-    <div class="d-flex gap-2">
-      <input type="email" id="lookupEmail" class="form-control mm-input"
-             placeholder="your@email.com" style="font-size:14px">
-      <button class="mm-btn-outline-sm" id="lookupBtn" onclick="doLookup()" style="white-space:nowrap;padding:6px 14px">
-        <i class="bi bi-send me-1"></i>Send Link
+      <!-- Subscribe button -->
+      <button class="mm-btn-primary w-100" id="subBtn" onclick="doSubscribe()" disabled style="font-size:15px;padding:12px">
+        <i class="bi bi-calendar-check me-2"></i>Subscribe / Update Daily Digest
       </button>
+      <p class="text-muted text-center mt-3" style="font-size:12px">
+        <i class="bi bi-shield-check me-1"></i>
+        Your email is used only to deliver alerts. We never share it.
+      </p>
     </div>
   </div>
+
 </div>
 {% endif %}
 

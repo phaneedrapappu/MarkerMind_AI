@@ -55,8 +55,24 @@ class EmailAlertAgent(BaseAgent):
         self.username: Optional[str] = os.getenv("SMTP_USER")
         self.password: Optional[str] = os.getenv("SMTP_PASSWORD")
 
-        self.sender: str = smtp_cfg.get("sender", self.username or "marketmind@example.com")
-        self.recipients: List[str] = smtp_cfg.get("recipients", [])
+        # Always use SMTP_USER as sender so it matches the authenticated account
+        self.sender: str = self.username or smtp_cfg.get("sender", "marketmind@example.com")
+
+        # Recipients from config — filter out placeholder values
+        _PLACEHOLDER = {"your-email@gmail.com", "", "your_email@gmail.com"}
+        cfg_recipients = [r for r in smtp_cfg.get("recipients", []) if r not in _PLACEHOLDER]
+        if cfg_recipients:
+            self.recipients: List[str] = cfg_recipients
+        else:
+            # Fall back to active DB subscribers
+            try:
+                subs = db_manager.get_active_subscribers() if db_manager else []
+                self.recipients = [s["email"] for s in subs if s.get("email")]
+                if self.recipients:
+                    logger.info(f"Email recipients loaded from DB: {self.recipients}")
+            except Exception as _e:
+                logger.warning(f"Could not load subscribers from DB: {_e}")
+                self.recipients = []
         # Optional unsubscribe URL injected per-subscriber at runtime
         self.unsubscribe_url: str = config.get("unsubscribe_url", "")
         self.app_url: str = config.get("app_url", "http://localhost:5050")

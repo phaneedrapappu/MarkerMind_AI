@@ -13,7 +13,7 @@ MarketMind AI is an autonomous multi-agent system that monitors Indian stock mar
 ## 🏗️ Agent Pipeline
 
 ```
-MarketDataAgent       →  NSE API / yfinance fallback
+MarketDataAgent       →  NSE API (Playwright/curl-cffi bypass) → Yahoo Finance → Finnhub → Stooq → BSE → Alpha Vantage → DB cache
        ↓
   NewsAgent            →  RSS feeds (Google News, ET Markets, Moneycontrol)
        ↓
@@ -61,6 +61,9 @@ Flask Dashboard        →  Mobile-first browser UI (auth, portfolio, screener)
 | **Per-user watchlist (drives scheduled Telegram alerts)** | ✅ |
 | **Telegram bot alerts via deep-link subscribe flow** | ✅ |
 | **Global market status strip (open/closed/public holiday)** | ✅ |
+| **Setup warning banner on new machines (missing API key / SMTP / secret key)** | ✅ |
+| **`/api/health` endpoint — config check for all services** | ✅ |
+| **First-load fallback — popular stocks shown before pipeline runs** | ✅ |
 
 ---
 
@@ -114,6 +117,18 @@ SMTP_PASSWORD=your_gmail_app_password
 FLASK_PORT=5050
 FLASK_SECRET_KEY=change_me_to_a_long_random_string
 
+# ── Market Data fallback chain (optional — improves reliability) ──────────────
+# Fallback order: NSE → Yahoo Finance → Finnhub → Stooq → BSE → Alpha Vantage → Cache
+
+# Finnhub — 60 req/min (paid plan needed for NSE India)
+# NOTE: Free tier returns 403 for Indian stocks. Leave blank to skip.
+# Sign up free at https://finnhub.io → Dashboard → copy API Key
+FINNHUB_KEY=your_finnhub_api_key
+
+# Alpha Vantage — 25 req/day free tier
+# Get key at https://www.alphavantage.co/support/#api-key
+# ALPHA_VANTAGE_KEY=your_alpha_vantage_key
+
 # ── Telegram (optional) ──────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 # Leave blank for localhost/polling mode.
@@ -123,7 +138,7 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 
 > **Switch AI providers instantly** — just change `LLM_PROVIDER` and restart. No other changes needed.
 
-### 4. (Optional) Edit `config/config.yaml`
+#### 4. (Optional) Edit `config/config.yaml`
 
 Set default stocks and the default sender/recipient for unattended scheduled runs:
 
@@ -143,19 +158,25 @@ agents:
 
 ## 🖥️ How to Run
 
-### Option A — Web Dashboard (recommended)
+### Option A — One-click (start.sh / start.bat)
+
+See **Quick Start → Option A** above. Handles venv, deps, `.env`, and startup in one step.
+
+### Option B — Web Dashboard (manual)
 
 ```bash
+source venv/bin/activate
 python3 app.py
 # Open http://localhost:5050
 ```
 
 - Click **Run Analysis** in the navbar (or the ▶ button on mobile) — **login required**; non-logged-in users see a "Login to Run" button that redirects to `/login`
 - **Pick stocks** from 80+ NSE symbols grouped by sector, use the search box, or choose a preset
-- **Add recipients** — type emails one by one (press `Enter` or `,` after each); add as many as you need
+- **Add recipients** (Step 2 — one-time) — type emails one by one (press `Enter` or `,` after each); add as many as you need
+- **Optional: Daily Digest toggle** — if an email is entered, a `📬 Also subscribe for Daily Digest` toggle appears. Check it to also set up automated 2× daily emails for those stocks in one step — no need to visit `/daily-digest` separately
 - Hit **Run Analysis** — the pipeline runs in the background, the page refreshes when done
 
-### Option B — CLI
+### Option C — CLI
 
 ```bash
 # Run once with defaults from config.yaml
@@ -179,7 +200,7 @@ python3 main.py --search-stocks banking
 python3 main.py --search-stocks pharma
 ```
 
-### Option C — REST API
+### Option D — REST API
 
 ```bash
 # Trigger pipeline programmatically
@@ -209,7 +230,7 @@ curl http://localhost:5050/api/pipeline/status
 | `/screener` | No | **Stock Screener** — filter by sector, signal, RSI range, MACD trend |
 | `/backtest` | No | **Signal Backtesting** — simulate historical signals, P&L log, equity curve chart |
 | `/alerts` | No | Email alert history |
-| `/subscribe` | No | **Email Subscription** — pick stocks, subscribe for 2×/day digests |
+| `/subscribe` | No | **Daily Digest** — pick stocks, subscribe for automated 2×/day emails (nav shows "Daily Digest") |
 | `/unsubscribe?token=…` | No | One-click email unsubscribe |
 | `/login` | — | User login page |
 | `/register` | — | User registration page |
@@ -275,14 +296,17 @@ After signing in:
 
 MarketMind AI uses a **single shared bot** owned by the app. Users subscribe via a one-tap Telegram deep-link — no manual chat ID entry required.
 
-#### Subscribe flow (30 seconds)
+#### Subscribe flow
 
 1. Create your bot: open Telegram → search **@BotFather** → `/newbot` → copy token → add to `.env` as `TELEGRAM_BOT_TOKEN`
 2. Restart the app
 3. Go to **Portfolio page** → scroll to **Telegram Alerts** → click **Subscribe to Alerts**
-4. Telegram opens with the bot pre-selected → press **Start**
-5. Bot replies: *"✅ You're now subscribed to MarketMind AI alerts"*
-6. Portfolio page auto-detects the link and shows **Connected ✅**
+4. Click **Open Telegram** or **Open Telegram Web** (if desktop browser blocks the popup)
+5. Press **Start** in the bot chat
+6. Bot replies: *"✅ You're now subscribed to MarketMind AI alerts"*
+7. Portfolio page auto-detects the link and shows **Connected ✅** (polls every 3 s for up to 60 s)
+
+> **Linux browser shows "open xdg-open"?**  — Use the **Open Telegram Web** button, sign in to [web.telegram.org](https://web.telegram.org), then paste the `/start <token>` command shown on the page.
 
 #### What the Telegram message looks like
 
@@ -326,14 +350,16 @@ python3 setup_telegram_webhook.py delete  # revert to polling
 
 ---
 
-### Subscribe Page (`/subscribe`)
-A standalone subscription page that works like a lightweight SaaS product:
+### Daily Digest Page (`/subscribe`) — *navbar: "Daily Digest"*
+A standalone subscription page for setting up **automated recurring emails** (distinct from one-time Run Analysis):
 - Enter your email address and choose stocks to track
 - The app sends a full AI digest **2 times per day**:
   - **8:45 AM IST** — pre-market signal preview before NSE opens
   - **4:15 PM IST** — post-market summary after NSE closes
 - Unsubscribe with a single click (token-based link included in every email)
 - No login required — email is the identity
+
+> **Tip:** You can also subscribe from within the **Run Analysis** modal (Step 2 → check *Also subscribe for Daily Digest*) without navigating away.
 
 ---
 
@@ -354,9 +380,17 @@ Global news is fetched every time the pipeline runs (tagged internally as `__GLO
 
 ### How it works
 
-1. Visit `/subscribe` in the browser (or navigate via the *Subscribe* navbar link)
+**Via Run Analysis modal (recommended — one flow):**
+1. Click **Run Analysis** in the navbar
+2. Pick stocks (Step 1)
+3. Enter email (Step 2 — marked *One-time*)
+4. Check **📬 Also subscribe for Daily Digest** toggle that appears
+5. Click **Run Analysis** — analysis runs AND subscription is created simultaneously
+
+**Via Daily Digest page (standalone):**
+1. Visit `/subscribe` in the browser (or navigate via the *Daily Digest* navbar link)
 2. Choose the NSE stocks you want to track
-3. Enter your email and click **Subscribe / Update Watchlist**
+3. Enter your email and click **Subscribe / Update Daily Digest**
 4. Automated digests land in your inbox **2 times every trading day**:
    - **08:45 AM IST** — pre-market analysis before NSE opens (9:15 AM)
    - **04:15 PM IST** — post-market recap after NSE closes (3:30 PM)
@@ -668,24 +702,28 @@ Options:
 ```
 MarkerMind_AI/
 ├── main.py                      # CLI entry point (--stocks, --email, --schedule, --list-stocks)
-├── app.py                       # Flask web server + REST API + Phase 2 routes
+├── app.py                       # Flask web server + REST API + all routes
+├── start.sh                     # One-click launcher for Linux / macOS
+├── start.bat                    # One-click launcher for Windows
 ├── config/
 │   └── config.yaml              # Non-sensitive configuration
 ├── .env                         # Secrets (API keys, SMTP, Telegram) — never commit this
-├── requirements.txt
+├── .env.example                 # Template — copy to .env and fill in
+├── requirements.txt             # All Python dependencies (includes bcrypt)
 ├── src/
 │   ├── orchestrator.py          # 6-stage agent pipeline with apply_overrides()
 │   ├── stock_discovery.py       # Dynamic NSE equity list fetcher + cache
 │   ├── telegram_utils.py        # Telegram message builder + send_pipeline_alerts()
+│   ├── email_utils.py           # Standalone SMTP helpers (welcome/update/lookup emails)
 │   ├── agents/
 │   │   ├── base_agent.py        # ABC with initialize / execute / cleanup
-│   │   ├── market_data_agent.py # NSE primary + yfinance fallback
+│   │   ├── market_data_agent.py # NSE (Playwright bypass) → Yahoo Finance → Finnhub → Stooq → BSE → Alpha Vantage → cache
 │   │   ├── news_agent.py        # RSS feeds (no API key needed)
-│   │   ├── ai_analysis_agent.py # Gemini / OpenAI dual-provider, batched
+│   │   ├── ai_analysis_agent.py # Claude / Gemini / OpenAI — batched per cycle
 │   │   ├── signal_generator_agent.py  # Rule-based BUY/HOLD/SELL
 │   │   ├── report_generator_agent.py  # matplotlib PNG charts
 │   │   └── email_alert_agent.py       # STARTTLS HTML digest, N recipients
-│   ├── technical/               # ── Phase 2 ──
+│   ├── technical/
 │   │   ├── __init__.py          # Exports get_indicators, compute_rsi/macd/bollinger
 │   │   └── indicators.py        # RSI, MACD, Bollinger Bands, MA engine (yfinance + DB fallback)
 │   ├── data_sources/
@@ -697,24 +735,25 @@ MarkerMind_AI/
 │       └── analysis_models.py
 ├── frontend/
 │   ├── templates/               # Jinja2 templates (mobile-first dark UI)
-│   │   ├── base.html            # Navbar (Screener, Backtest, Portfolio, Login/Logout), theme toggle
-│   │   ├── dashboard.html       # KPIs, signals, India + Global news tabs, doughnut chart
+│   │   ├── base.html            # Navbar, market status strip, theme toggle
+│   │   ├── dashboard.html       # KPIs, signals, India + Global news tabs, setup warning banner
 │   │   ├── stock_detail.html    # Per-stock: price, RSI/MACD/Bollinger charts, AI analysis
-│   │   ├── screener.html        # ── Phase 2 ── Multi-criteria stock screener
-│   │   ├── backtest.html        # ── Phase 2 ── Signal backtesting + equity curve
-│   │   ├── portfolio.html       # ── Phase 2 ── Portfolio + watchlist + Telegram config
-│   │   ├── login.html           # ── Phase 2 ── Login form
-│   │   ├── register.html        # ── Phase 2 ── Registration form
+│   │   ├── stocks.html          # Markets page — trending, sector leaders, screener
+│   │   ├── screener.html        # Multi-criteria stock screener
+│   │   ├── backtest.html        # Signal backtesting + equity curve
+│   │   ├── portfolio.html       # Portfolio + watchlist + Telegram subscribe
+│   │   ├── login.html           # Login form
+│   │   ├── register.html        # Registration form
 │   │   ├── alerts.html          # Email history with recipient tags
-│   │   └── subscribe.html       # Subscription sign-up form with live stock picker
+│   │   └── subscribe.html       # Subscription sign-up with live stock picker
 │   └── static/
-│       ├── style.css            # CSS variables, dark/light themes
-│       └── main.js              # Stock picker, email tag input, pipeline polling
+│       ├── style.css            # CSS variables, dark/light themes, market strip
+│       └── main.js              # Stock picker, email tags, pipeline polling, health check
 ├── data/
-│   ├── marketmind.db            # SQLite database (auto-created; includes users/portfolio/watchlist)
+│   ├── marketmind.db            # SQLite DB (auto-created)
 │   └── reports/                 # Generated chart PNGs
 └── logs/
-    └── marketmind.log
+    └── app.log
 ```
 
 ---
@@ -778,7 +817,8 @@ scheduler:
 | `GET` | `/api/stocks/live?search=KEYWORD` | Full NSE equity list from live CSV (JSON) |
 | `GET` | `/api/stock/<symbol>/history` | Price history (JSON) |
 | `GET` | `/api/stock/<symbol>/indicators` | **RSI / MACD / Bollinger Bands (10-min cached, JSON)** |
-| `GET` | `/api/pipeline/status` | `{"running": true/false}` |
+| `GET` | `/api/pipeline/status` | `{"running": true/false, "last_error": "..."}` — last error empty on success |
+| `GET` | `/api/health` | **Configuration status** — LLM key, SMTP, Telegram, secret key, DB; returns `warnings[]` list |
 | `GET` | `/api/market/status` | Market open/closed/holiday status + next opening time (JSON) |
 | `GET` | `/api/screener?sector=&signal=&rsi_min=&rsi_max=&macd_trend=` | **Screener results (JSON)** |
 | `GET` | `/api/backtest/<symbol>` | **Backtest results for symbol (JSON)** |
@@ -809,8 +849,8 @@ scheduler:
 |---|---|
 | API credentials | Env vars only (`.env`); never in `config.yaml` or source |
 | SMTP password | `SMTP_PASSWORD` env var; STARTTLS enforced |
-| User passwords | Hashed with **bcrypt** (salted); plain-text never stored |
-| Session security | Flask-Login cookies; signed by `FLASK_SECRET_KEY` |
+| User passwords | Hashed with **bcrypt** (salted, ≥4.0.0); plain-text never stored |
+| Session security | Flask-Login cookies; signed by `FLASK_SECRET_KEY` — must be set in `.env` |
 | `.env` in git | Listed in `.gitignore` |
 | SQL injection | SQLAlchemy ORM parameterised queries |
 | Duplicate data | Upsert by `symbol + date` for signals/analysis; deduplicate news by URL |
@@ -863,9 +903,9 @@ Stocks are grouped by sector in the web UI and CLI. Use `--list-stocks` to see a
 - [x] Login-aware navigation (Portfolio/Logout when signed in, Login otherwise)
 
 **Phase 3 — Planned**
+- [ ] Docker container for one-command deployment on any machine
 - [ ] Options chain analysis
 - [ ] ML-based signal confidence scoring
-- [ ] Docker container for one-command deployment
 - [ ] Multi-region support (BSE, global markets)
 - [ ] WhatsApp notifications (Twilio)
 - [ ] Strategy builder (custom entry/exit rules)

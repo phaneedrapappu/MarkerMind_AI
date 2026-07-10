@@ -18,6 +18,9 @@ yfinance==0.2.37
 # Database
 sqlalchemy==2.0.25
 
+# Password hashing (REQUIRED for user registration/login)
+bcrypt>=4.0.0
+
 # Visualization / Report generation
 matplotlib==3.8.2
 seaborn==0.13.1
@@ -37,6 +40,13 @@ apscheduler==3.10.4
 # Environment variables
 python-dotenv==1.0.1
 holidays>=0.50
+
+# Market data – NSE bypass (Akamai cookie harvesting)
+# playwright>=1.40.0 is installed separately; run: playwright install chromium
+playwright>=1.40.0
+curl-cffi>=0.6.0             # Chrome TLS fingerprint spoofing for NSE requests
+# Finnhub uses the built-in `requests` library – no extra package needed.
+# Alpha Vantage also uses `requests` – no extra package needed.
 
 # Testing
 pytest==7.4.4
